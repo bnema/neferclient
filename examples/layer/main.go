@@ -47,22 +47,27 @@ const (
 
 type model struct{ count int }
 
-// inputRects is the clickable part of the surface: the button. NeferGUI does
-// not report where a control was laid out, so the rectangle repeats the
-// layout constants. The slice is never modified: SetInputRects copies it.
-var inputRects = []nefergui.Rect{{X: pad, Y: buttonY, Width: buttonW, Height: buttonH}}
+// The styles and the clickable rectangle are built once from the layout
+// constants, so they cannot disagree. NeferGUI does not report where a control
+// was laid out; inputRects is the button. SetInputRects copies the slice.
+var (
+	columnStyle = nefergui.Inline(fmt.Sprintf("padding:%dpx;gap:%dpx;color:#ffffff", pad, gap))
+	labelStyle  = nefergui.Inline(fmt.Sprintf("height:%dpx", labelH))
+	buttonStyle = nefergui.Inline(fmt.Sprintf("width:%dpx;height:%dpx;background:%s", buttonW, buttonH, buttonColor))
+	inputRects  = []nefergui.Rect{{X: pad, Y: buttonY, Width: buttonW, Height: buttonH}}
+)
 
 // view builds one frame from the model. Button.Activated is true during the
 // frame built after a click.
 func view(f *nefergui.Frame, m *model) {
-	root := f.Root().Column(nefergui.Inline("padding:10px;gap:10px;color:#ffffff"))
-	root.TextInt("Count: ", int64(m.count), nefergui.Inline("height:20px"))
-	if root.Button("Add one", nefergui.Key("add"),
-		nefergui.Inline("width:200px;height:40px;background:"+buttonColor)).Activated() {
+	root := f.Root().Column(columnStyle)
+	root.TextInt("Count: ", int64(m.count), labelStyle)
+	if root.Button("Add one", nefergui.Key("add"), buttonStyle).Activated() {
 		m.count++
 	}
-	// The rectangle is valid, so the error cannot happen.
-	_ = f.SetInputRects(inputRects)
+	if err := f.SetInputRects(inputRects); err != nil {
+		panic(err) // a fixed, valid rectangle: an error is a programming bug
+	}
 }
 
 type app struct {
@@ -325,21 +330,23 @@ func (a *app) draw() error {
 // view changed it. Both use logical pixels in surface coordinates, so the
 // rectangles are copied field by field without scaling (Output.Width and
 // Height, the buffer size, are the physical ones). Nil means the whole surface
-// and an empty slice means click-through, in both libraries. The region takes
-// effect with the next Present, which follows.
+// and an empty slice means click-through, in both libraries. Before the first
+// Present the region is applied with it; afterwards SetInputRegion commits it
+// immediately.
 func (a *app) setInputRegion() error {
 	out := &a.out
 	if !out.InputRectsChanged {
 		return nil
 	}
-	if out.InputRects == nil {
-		return a.surf.SetInputRegion(nil)
+	var region []neferclient.Rect // nil: the whole surface
+	if out.InputRects != nil {
+		a.region = a.region[:0] // reused: no allocation once it has grown
+		for _, r := range out.InputRects {
+			a.region = append(a.region, neferclient.Rect{X: r.X, Y: r.Y, Width: r.Width, Height: r.Height})
+		}
+		region = a.region
 	}
-	a.region = a.region[:0] // reused: no allocation once it has grown
-	for _, r := range out.InputRects {
-		a.region = append(a.region, neferclient.Rect{X: r.X, Y: r.Y, Width: r.Width, Height: r.Height})
-	}
-	if err := a.surf.SetInputRegion(a.region); err != nil {
+	if err := a.surf.SetInputRegion(region); err != nil {
 		return fmt.Errorf("input region: %w", err)
 	}
 	return nil
