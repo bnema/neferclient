@@ -2,6 +2,8 @@ package neferclient
 
 import (
 	"sync"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -19,6 +21,24 @@ const (
 	evOutputMode                        // flags, a = width, b = height, global
 	evOutputDone                        // global
 	evFDReady                           // fd (epoll data)
+
+	// Surface events. id is the wl_surface object id (SurfaceID).
+	evPing               // serial (xdg_wm_base)
+	evXdgToplevel        // id, a = width, b = height (before the matching evXdgConfigure)
+	evXdgConfigure       // id, serial
+	evLayerConfigure     // id, serial, a = width, b = height
+	evLockConfigure      // id, serial, a = width, b = height
+	evClosed             // id
+	evFrame              // id
+	evPreferredScale     // id, a = fractional scale in 120ths
+	evBufferScale        // id, a = integer factor
+	evFeedbackTable      // id, fd = owned descriptor, flags = size
+	evFeedbackMainDevice // id, dev
+	evFeedbackFormats    // id, name = one chunk of tranche format indices
+	evFeedbackDone       // id
+	evLocked             // id = lock generation
+	evLockFinished       // id = lock generation
+	evBadEvent           // id, a = badEvent code: the reader met a malformed event
 )
 
 // event is the only thing the reader and the epoll goroutine hand to the
@@ -30,9 +50,27 @@ type event struct {
 	global  uint32
 	version uint32
 	flags   uint32
-	fd      int32
+	id      uint32 // wl_surface object id for surface events
+	serial  uint32
+	fd      int32 // epoll data, or a received descriptor owned by the event
 	a, b    int32
+	dev     uint64
 	name    [maxNameLen]byte
+}
+
+// hasFD reports whether the event owns a received descriptor that must be
+// closed if the event is dropped.
+func (e *event) hasFD() bool { return e.kind == evFeedbackTable && e.fd >= 0 }
+
+func (e *event) closeFD() {
+	if e.hasFD() {
+		_ = unix.Close(int(e.fd))
+		e.fd = -1
+	}
+}
+
+func (e *event) setBytes(b []byte) {
+	e.nameLen = uint8(copy(e.name[:], b))
 }
 
 func (e *event) setName(s string) {
@@ -87,6 +125,7 @@ func (q *queue) post(ev *event) {
 		switch {
 		case q.stopped:
 			q.mu.Unlock()
+			ev.closeFD()
 			return
 		case q.pausing:
 			q.held = append(q.held, *ev)
@@ -111,6 +150,7 @@ func (q *queue) pop(ev *event) bool {
 		return false
 	}
 	*ev = q.ring[q.head]
+	q.ring[q.head].kind = 0 // ownership of a carried descriptor moved to ev
 	q.head = (q.head + 1) % ringSize
 	full := q.n == ringSize
 	q.n--
@@ -238,6 +278,19 @@ func (q *queue) takeHeld() []event {
 	q.held = nil
 	q.mu.Unlock()
 	return held
+}
+
+// closeFDs closes the descriptors owned by events nobody will drain. Only
+// valid once both producers have stopped.
+func (q *queue) closeFDs() {
+	q.mu.Lock()
+	for i := range q.n {
+		q.ring[(q.head+i)%ringSize].closeFD()
+	}
+	for i := range q.held {
+		q.held[i].closeFD()
+	}
+	q.mu.Unlock()
 }
 
 // length reports how many events are queued.

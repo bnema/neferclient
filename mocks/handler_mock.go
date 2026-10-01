@@ -45,6 +45,98 @@ func (_m *MockHandler) EXPECT() *MockHandler_Expecter {
 	return &MockHandler_Expecter{mock: &_m.Mock}
 }
 
+// Closed provides a mock function for the type MockHandler
+func (_mock *MockHandler) Closed(id neferclient.SurfaceID) {
+	_mock.Called(id)
+	return
+}
+
+// MockHandler_Closed_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Closed'
+type MockHandler_Closed_Call struct {
+	*mock.Call
+}
+
+// Closed is a helper method to define mock.On call
+//   - id neferclient.SurfaceID
+func (_e *MockHandler_Expecter) Closed(id any) *MockHandler_Closed_Call {
+	return &MockHandler_Closed_Call{Call: _e.mock.On("Closed", id)}
+}
+
+func (_c *MockHandler_Closed_Call) Run(run func(id neferclient.SurfaceID)) *MockHandler_Closed_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 neferclient.SurfaceID
+		if args[0] != nil {
+			arg0 = args[0].(neferclient.SurfaceID)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockHandler_Closed_Call) Return() *MockHandler_Closed_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockHandler_Closed_Call) RunAndReturn(run func(id neferclient.SurfaceID)) *MockHandler_Closed_Call {
+	_c.Run(run)
+	return _c
+}
+
+// Configure provides a mock function for the type MockHandler
+func (_mock *MockHandler) Configure(id neferclient.SurfaceID, width int32, height int32) {
+	_mock.Called(id, width, height)
+	return
+}
+
+// MockHandler_Configure_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Configure'
+type MockHandler_Configure_Call struct {
+	*mock.Call
+}
+
+// Configure is a helper method to define mock.On call
+//   - id neferclient.SurfaceID
+//   - width int32
+//   - height int32
+func (_e *MockHandler_Expecter) Configure(id any, width any, height any) *MockHandler_Configure_Call {
+	return &MockHandler_Configure_Call{Call: _e.mock.On("Configure", id, width, height)}
+}
+
+func (_c *MockHandler_Configure_Call) Run(run func(id neferclient.SurfaceID, width int32, height int32)) *MockHandler_Configure_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 neferclient.SurfaceID
+		if args[0] != nil {
+			arg0 = args[0].(neferclient.SurfaceID)
+		}
+		var arg1 int32
+		if args[1] != nil {
+			arg1 = args[1].(int32)
+		}
+		var arg2 int32
+		if args[2] != nil {
+			arg2 = args[2].(int32)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockHandler_Configure_Call) Return() *MockHandler_Configure_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockHandler_Configure_Call) RunAndReturn(run func(id neferclient.SurfaceID, width int32, height int32)) *MockHandler_Configure_Call {
+	_c.Run(run)
+	return _c
+}
+
 // Error provides a mock function for the type MockHandler
 func (_mock *MockHandler) Error(err error) {
 	_mock.Called(err)
@@ -125,6 +217,152 @@ func (_c *MockHandler_FDReady_Call) RunAndReturn(run func(id uint64)) *MockHandl
 	return _c
 }
 
+// FeedbackDone provides a mock function for the type MockHandler
+func (_mock *MockHandler) FeedbackDone(id neferclient.SurfaceID) {
+	_mock.Called(id)
+	return
+}
+
+// MockHandler_FeedbackDone_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'FeedbackDone'
+type MockHandler_FeedbackDone_Call struct {
+	*mock.Call
+}
+
+// FeedbackDone is a helper method to define mock.On call
+//   - id neferclient.SurfaceID
+func (_e *MockHandler_Expecter) FeedbackDone(id any) *MockHandler_FeedbackDone_Call {
+	return &MockHandler_FeedbackDone_Call{Call: _e.mock.On("FeedbackDone", id)}
+}
+
+func (_c *MockHandler_FeedbackDone_Call) Run(run func(id neferclient.SurfaceID)) *MockHandler_FeedbackDone_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 neferclient.SurfaceID
+		if args[0] != nil {
+			arg0 = args[0].(neferclient.SurfaceID)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockHandler_FeedbackDone_Call) Return() *MockHandler_FeedbackDone_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockHandler_FeedbackDone_Call) RunAndReturn(run func(id neferclient.SurfaceID)) *MockHandler_FeedbackDone_Call {
+	_c.Run(run)
+	return _c
+}
+
+// Frame provides a mock function for the type MockHandler
+func (_mock *MockHandler) Frame(id neferclient.SurfaceID) {
+	_mock.Called(id)
+	return
+}
+
+// MockHandler_Frame_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Frame'
+type MockHandler_Frame_Call struct {
+	*mock.Call
+}
+
+// Frame is a helper method to define mock.On call
+//   - id neferclient.SurfaceID
+func (_e *MockHandler_Expecter) Frame(id any) *MockHandler_Frame_Call {
+	return &MockHandler_Frame_Call{Call: _e.mock.On("Frame", id)}
+}
+
+func (_c *MockHandler_Frame_Call) Run(run func(id neferclient.SurfaceID)) *MockHandler_Frame_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 neferclient.SurfaceID
+		if args[0] != nil {
+			arg0 = args[0].(neferclient.SurfaceID)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockHandler_Frame_Call) Return() *MockHandler_Frame_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockHandler_Frame_Call) RunAndReturn(run func(id neferclient.SurfaceID)) *MockHandler_Frame_Call {
+	_c.Run(run)
+	return _c
+}
+
+// LockFinished provides a mock function for the type MockHandler
+func (_mock *MockHandler) LockFinished() {
+	_mock.Called()
+	return
+}
+
+// MockHandler_LockFinished_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'LockFinished'
+type MockHandler_LockFinished_Call struct {
+	*mock.Call
+}
+
+// LockFinished is a helper method to define mock.On call
+func (_e *MockHandler_Expecter) LockFinished() *MockHandler_LockFinished_Call {
+	return &MockHandler_LockFinished_Call{Call: _e.mock.On("LockFinished")}
+}
+
+func (_c *MockHandler_LockFinished_Call) Run(run func()) *MockHandler_LockFinished_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockHandler_LockFinished_Call) Return() *MockHandler_LockFinished_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockHandler_LockFinished_Call) RunAndReturn(run func()) *MockHandler_LockFinished_Call {
+	_c.Run(run)
+	return _c
+}
+
+// Locked provides a mock function for the type MockHandler
+func (_mock *MockHandler) Locked() {
+	_mock.Called()
+	return
+}
+
+// MockHandler_Locked_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Locked'
+type MockHandler_Locked_Call struct {
+	*mock.Call
+}
+
+// Locked is a helper method to define mock.On call
+func (_e *MockHandler_Expecter) Locked() *MockHandler_Locked_Call {
+	return &MockHandler_Locked_Call{Call: _e.mock.On("Locked")}
+}
+
+func (_c *MockHandler_Locked_Call) Run(run func()) *MockHandler_Locked_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockHandler_Locked_Call) Return() *MockHandler_Locked_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockHandler_Locked_Call) RunAndReturn(run func()) *MockHandler_Locked_Call {
+	_c.Run(run)
+	return _c
+}
+
 // OutputAdded provides a mock function for the type MockHandler
 func (_mock *MockHandler) OutputAdded(out *neferclient.Output) {
 	_mock.Called(out)
@@ -201,6 +439,52 @@ func (_c *MockHandler_OutputRemoved_Call) Return() *MockHandler_OutputRemoved_Ca
 }
 
 func (_c *MockHandler_OutputRemoved_Call) RunAndReturn(run func(global uint32)) *MockHandler_OutputRemoved_Call {
+	_c.Run(run)
+	return _c
+}
+
+// Scale provides a mock function for the type MockHandler
+func (_mock *MockHandler) Scale(id neferclient.SurfaceID, scale float64) {
+	_mock.Called(id, scale)
+	return
+}
+
+// MockHandler_Scale_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Scale'
+type MockHandler_Scale_Call struct {
+	*mock.Call
+}
+
+// Scale is a helper method to define mock.On call
+//   - id neferclient.SurfaceID
+//   - scale float64
+func (_e *MockHandler_Expecter) Scale(id any, scale any) *MockHandler_Scale_Call {
+	return &MockHandler_Scale_Call{Call: _e.mock.On("Scale", id, scale)}
+}
+
+func (_c *MockHandler_Scale_Call) Run(run func(id neferclient.SurfaceID, scale float64)) *MockHandler_Scale_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 neferclient.SurfaceID
+		if args[0] != nil {
+			arg0 = args[0].(neferclient.SurfaceID)
+		}
+		var arg1 float64
+		if args[1] != nil {
+			arg1 = args[1].(float64)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockHandler_Scale_Call) Return() *MockHandler_Scale_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockHandler_Scale_Call) RunAndReturn(run func(id neferclient.SurfaceID, scale float64)) *MockHandler_Scale_Call {
 	_c.Run(run)
 	return _c
 }

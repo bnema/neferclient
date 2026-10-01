@@ -579,5 +579,6 @@ func (c *Conn) Close() error {
 	if c.efd >= 0 {
 		_ = unix.Close(c.efd)
 	}
+	c.q.closeFDs() // both producers are gone: close what nobody will drain
 	return err
 }
