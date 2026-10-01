@@ -2,11 +2,14 @@ package neferclient_test
 
 import (
 	"context"
+	"runtime"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 
 	"github.com/bnema/neferclient"
 	neferclientmocks "github.com/bnema/neferclient/mocks"
@@ -134,4 +137,136 @@ func TestHeadlessSeat(t *testing.T) {
 	require.NoError(t, c.Dispatch(h))
 	require.NoError(t, seat.SetCursor(neferclient.CursorPointer))
 	require.NoError(t, s.Close())
+}
+
+// newUdmabuf returns a linear DMA-BUF made from a udmabuf; the test is skipped
+// when the machine lacks /dev/udmabuf.
+func newUdmabuf(t *testing.T, w, h int) int {
+	t.Helper()
+	size := (w*h*4 + 4095) &^ 4095
+	mem, err := unix.MemfdCreate("udmabuf", unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = unix.Close(mem) })
+	require.NoError(t, unix.Ftruncate(mem, int64(size)))
+	_, err = unix.FcntlInt(uintptr(mem), unix.F_ADD_SEALS, unix.F_SEAL_SHRINK)
+	require.NoError(t, err)
+	dev, err := unix.Open("/dev/udmabuf", unix.O_RDWR|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Skipf("no udmabuf: %v", err)
+	}
+	defer unix.Close(dev)
+	req := struct {
+		memfd, flags uint32
+		offset, size uint64
+	}{memfd: uint32(mem), size: uint64(size)}
+	fd, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(dev), 0x40187542, uintptr(unsafe.Pointer(&req)))
+	if errno != 0 {
+		t.Skipf("UDMABUF_CREATE: %v", errno)
+	}
+	t.Cleanup(func() { _ = unix.Close(int(fd)) })
+	return int(fd)
+}
+
+// newSyncobjFD returns an exported DRM syncobj for use as a timeline and a
+// function that signals one of its points; the test is skipped when there is
+// no render node.
+func newSyncobjFD(t *testing.T) (fd int, signal func(point uint64)) {
+	t.Helper()
+	dev, err := unix.Open("/dev/dri/renderD128", unix.O_RDWR|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Skipf("no render node: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Close(dev) })
+	create := struct{ handle, flags uint32 }{} // struct drm_syncobj_create
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(dev), 0xC00864BF, uintptr(unsafe.Pointer(&create))); errno != 0 {
+		t.Skipf("SYNCOBJ_CREATE: %v", errno)
+	}
+	exp := struct { // struct drm_syncobj_handle, 24 bytes
+		handle, flags uint32
+		fd, pad       int32
+		point         uint64
+	}{handle: create.handle, fd: -1}
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(dev), 0xC01864C1, uintptr(unsafe.Pointer(&exp))); errno != 0 {
+		t.Skipf("SYNCOBJ_HANDLE_TO_FD: %v", errno)
+	}
+	t.Cleanup(func() { _ = unix.Close(int(exp.fd)) })
+	signal = func(point uint64) {
+		t.Helper()
+		// The kernel reads these through addresses stored in arg. Nothing
+		// between taking them and the syscall can move the stack, and
+		// KeepAlive holds them until it returns.
+		handles, points := [1]uint32{create.handle}, [1]uint64{point}
+		arg := struct { // struct drm_syncobj_timeline_array, 24 bytes
+			handles, points uint64
+			count, flags    uint32
+		}{uint64(uintptr(unsafe.Pointer(&handles))), uint64(uintptr(unsafe.Pointer(&points))), 1, 0}
+		_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(dev), 0xC01864CD, uintptr(unsafe.Pointer(&arg)))
+		runtime.KeepAlive(&handles)
+		runtime.KeepAlive(&points)
+		if errno != 0 {
+			t.Fatalf("SYNCOBJ_TIMELINE_SIGNAL: %v", errno)
+		}
+	}
+	return int(exp.fd), signal
+}
+
+// TestHeadlessReconfigureWhilePending drops every import of a mapped surface
+// while its frame is pending, imports again and presents again: the compositor
+// must raise no protocol error (the connection stays usable) and the frame
+// still arrives. The first commit's objects are destroyed before its acquire
+// point is signalled: a compositor that waits for acquire points still holds
+// that commit unapplied at that moment. Headless NeferWL applies commits
+// without waiting, so there it only shows the requests are accepted.
+func TestHeadlessReconfigureWhilePending(t *testing.T) {
+	c := connectHeadless(t)
+	const w, h = 200, 50
+	s, err := c.NewLayerSurface(neferclient.LayerConfig{
+		Level: neferclient.LayerTop, Anchors: neferclient.AnchorTop | neferclient.AnchorLeft, Width: w, Height: h,
+	})
+	require.NoError(t, err)
+	var configured, feedback bool
+	var frames int
+	hd := neferclientmocks.NewMockHandler(t)
+	hd.EXPECT().Configure(s.ID(), mock.Anything, mock.Anything).Run(func(neferclient.SurfaceID, int32, int32) { configured = true }).Return().Maybe()
+	hd.EXPECT().FeedbackDone(s.ID()).Run(func(neferclient.SurfaceID) { feedback = true }).Return().Maybe()
+	hd.EXPECT().Scale(s.ID(), mock.Anything).Return().Maybe()
+	hd.EXPECT().Frame(s.ID()).Run(func(neferclient.SurfaceID) { frames++ }).Return().Maybe()
+	dispatchUntil(t, c, hd, func() bool { return configured && feedback })
+	pw, ph, err := s.PhysicalSize()
+	require.NoError(t, err)
+
+	dmabuf := newUdmabuf(t, int(pw), int(ph))
+	// Separate acquire and release syncobjs keep their points independent.
+	acquire, signal := newSyncobjFD(t)
+	release, _ := newSyncobjFD(t)
+	imports := func() {
+		t.Helper()
+		require.NoError(t, s.ImportBuffer(1, &neferclient.Buffer{Width: pw, Height: ph, FourCC: 0x34325258, PlaneCount: 1,
+			Planes: [4]neferclient.Plane{{FD: dmabuf, Stride: uint32(pw) * 4}}}))
+		require.NoError(t, s.ImportTimeline(1, acquire))
+		require.NoError(t, s.ImportTimeline(2, release))
+	}
+	present := func(point uint64) {
+		t.Helper()
+		require.NoError(t, s.Present(&neferclient.Present{Buffer: 1, AcquireTimeline: 1, ReleaseTimeline: 2,
+			AcquirePoint: point, ReleasePoint: point, Opaque: true}))
+	}
+
+	imports()
+	present(1) // acquire point 1 is not signalled yet
+	// No Dispatch ran since the commit: its frame is pending for the library.
+	require.ErrorContains(t, s.Present(&neferclient.Present{Buffer: 1, AcquireTimeline: 1, ReleaseTimeline: 2}), "frame callback pending")
+	require.NoError(t, s.DestroyImports())
+	require.NoError(t, c.Roundtrip()) // a protocol error would fail here
+	signal(1)                         // lets a waiting compositor apply the commit
+	dispatchUntil(t, c, hd, func() bool { return frames == 1 })
+
+	imports()
+	signal(2)
+	present(2)
+	dispatchUntil(t, c, hd, func() bool { return frames == 2 })
+	require.NoError(t, s.DestroyImports())
+	require.NoError(t, s.Close())
+	require.NoError(t, c.Roundtrip())
+	require.NoError(t, c.Dispatch(hd))
 }

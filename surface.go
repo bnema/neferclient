@@ -168,7 +168,8 @@ func (s *Surface) Size() (w, h int32, scale float64) { return s.width, s.height,
 
 // Feedback returns the latest complete dmabuf feedback, or nil before the
 // first Handler.FeedbackDone. The value and its slice stay valid until the
-// next FeedbackDone.
+// next FeedbackDone; use [Feedback.Clone] to keep it, and [Feedback.Equal] to
+// tell a changed preference from a repeated one.
 func (s *Surface) Feedback() *Feedback {
 	if !s.fbDone {
 		return nil
