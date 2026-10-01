@@ -175,6 +175,60 @@ func hasColor(t *testing.T, path string, x, y int, r, g, b uint8) bool {
 	return near(pr, uint32(r)<<8) && near(pg, uint32(g)<<8) && near(pb, uint32(b)<<8)
 }
 
+// waitButton waits until a screenshot shows the layer example's button: it is
+// 200x40 logical pixels at (10, 40) of a surface placed at the output's
+// top-left corner, filled with #2060c0. It samples near the bottom-right
+// corner, away from the label, and looks through every screenshot because the
+// program may already have exited.
+func waitButton(t *testing.T, c *compositor, detail func() string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		shots, _ := filepath.Glob(filepath.Join(c.shots, "*.png"))
+		for _, p := range shots {
+			if hasColor(t, p, 200, 75, 0x20, 0x60, 0xc0) {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no screenshot (of %d) has the button colour at (200, 75): %s", len(shots), detail())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// lineReader reads the program's stdout line by line, copying it into all when
+// non-nil. expect fails the test unless the next line is want before ctx ends.
+func lineReader(ctx context.Context, t *testing.T, stdout io.Reader, all *syncBuffer, stderr *syncBuffer) (expect func(want string), lines <-chan string) {
+	ch := make(chan string, 8)
+	go func() {
+		defer close(ch)
+		sc := bufio.NewScanner(stdout)
+		for sc.Scan() {
+			if all != nil {
+				_, _ = all.Write(append(sc.Bytes(), '\n'))
+			}
+			select {
+			case ch <- sc.Text():
+			case <-ctx.Done(): // the test is over: do not block
+				return
+			}
+		}
+	}()
+	expect = func(want string) {
+		t.Helper()
+		select {
+		case l := <-ch:
+			if l != want {
+				t.Fatalf("got %q, want %q: %s", l, want, stderr.String())
+			}
+		case <-ctx.Done():
+			t.Fatalf("timeout waiting for %q: %s", want, stderr.String())
+		}
+	}
+	return expect, ch
+}
+
 func TestHeadlessLayer(t *testing.T) {
 	exe := build(t, "./layer")
 	c := startHeadless(t)
@@ -183,25 +237,38 @@ func TestHeadlessLayer(t *testing.T) {
 	cmd := c.command(ctx, exe, "-frames", "20")
 	out, err := cmd.CombinedOutput()
 	must(t, err, string(out))
+	waitButton(t, c, func() string { return string(out) })
+}
 
-	// The button is 200x40 logical pixels at (10, 40) of a surface placed at
-	// the output's top-left corner, filled with #2060c0. Sample near its
-	// bottom-right corner, away from the label. The program may already have
-	// exited, so look through every screenshot taken while it was mapped.
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		shots, _ := filepath.Glob(filepath.Join(c.shots, "*.png"))
-		for _, p := range shots {
-			if hasColor(t, p, 200, 75, 0x20, 0x60, 0xc0) {
-				t.Logf("button colour found in %s", filepath.Base(p))
-				return
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("no screenshot (of %d) has the button colour at (200, 75)", len(shots))
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+// TestHeadlessLayerInputRegion checks that the layer example forwards the
+// view's input rectangle to the compositor: NeferWL only delivers pointer
+// events to the surface inside the button, not over the label above it.
+func TestHeadlessLayerInputRegion(t *testing.T) {
+	exe := build(t, "./layer")
+	c := startHeadless(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	cmd := c.command(ctx, exe, "-log-pointer") // runs until killed
+	stdout, err := cmd.StdoutPipe()
+	must(t, err)
+	var stderr syncBuffer
+	cmd.Stderr = &stderr
+	must(t, cmd.Start())
+	t.Cleanup(func() { cancel(); _ = cmd.Wait() })
+	expect, _ := lineReader(ctx, t, stdout, nil, &stderr)
+
+	// The region is committed with the first buffer, so once the button is
+	// visible in a screenshot the compositor knows it.
+	waitButton(t, c, stderr.String)
+
+	// (50, 20) is over the label, outside the input region: the surface sees
+	// nothing. (100, 60) is over the button: the first event the program
+	// prints is its enter, so the label position did not enter earlier.
+	// Back on the label, the pointer leaves the surface again.
+	_, err = io.WriteString(c.input, "move 50 20\nsleep 300ms\nmove 100 60\nsleep 300ms\nmove 50 20\n")
+	must(t, err)
+	expect("pointer enter 100 60")
+	expect("pointer leave")
 }
 
 func TestHeadlessLock(t *testing.T) {
@@ -225,26 +292,7 @@ func TestHeadlessLock(t *testing.T) {
 	}
 	t.Cleanup(func() { cancel(); _ = wait() })
 	var all syncBuffer // everything the program printed on stdout
-	lines := make(chan string, 8)
-	go func() {
-		sc := bufio.NewScanner(stdout)
-		for sc.Scan() {
-			_, _ = all.Write(append(sc.Bytes(), '\n'))
-			lines <- sc.Text()
-		}
-		close(lines)
-	}()
-	expect := func(want string) {
-		t.Helper()
-		select {
-		case l := <-lines:
-			if l != want {
-				t.Fatalf("got %q, want %q: %s", l, want, stderr.String())
-			}
-		case <-ctx.Done():
-			t.Fatalf("timeout waiting for %q: %s", want, stderr.String())
-		}
-	}
+	expect, lines := lineReader(ctx, t, stdout, &all, &stderr)
 	expect("locked")
 	expect("focused") // the keyboard reached a lock surface: typing is safe
 	// Only the nested compositor receives this input; it types into the
