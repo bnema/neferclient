@@ -38,3 +38,4 @@ jobs:
       - run: make check
       - run: make race
       - run: make mocks-check
+      - run: make examples-check
