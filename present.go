@@ -124,6 +124,22 @@ func (s *Surface) ImportTimeline(id uint64, fd int) error {
 	return nil
 }
 
+// DestroyTimeline destroys an imported timeline object. The id is the one given
+// to [Surface.ImportTimeline]; it may be imported again afterwards. Do not
+// destroy a timeline that a pending commit still references. Surface.Close
+// destroys every remaining timeline.
+func (s *Surface) DestroyTimeline(id uint64) error {
+	t, ok := s.timelines[id]
+	if !ok {
+		return fmt.Errorf("neferclient: unknown timeline %d", id)
+	}
+	delete(s.timelines, id)
+	if err := t.Destroy(); err != nil {
+		return fmt.Errorf("neferclient: destroy timeline %d: %w", id, err)
+	}
+	return nil
+}
+
 // Present commits an imported buffer. It refuses before the first configure,
 // before the first complete dmabuf feedback and while the previous frame
 // callback is pending.
