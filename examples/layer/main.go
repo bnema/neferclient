@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/bnema/neferclient"
@@ -30,6 +31,10 @@ import (
 const (
 	surfaceW, surfaceH = 240, 90
 	buttonColor        = "#2060c0"
+
+	// guiMods is the set of modifiers NeferGUI knows. neferclient and NeferGUI
+	// use the same bit order for them, so the plain bits can be copied.
+	guiMods = neferclient.ModShift | neferclient.ModCtrl | neferclient.ModAlt | neferclient.ModSuper
 )
 
 type model struct{ count int }
@@ -71,7 +76,7 @@ type app struct {
 func main() {
 	frames := flag.Int("frames", 0, "redraw continuously and exit after this many frames (0: run until closed)")
 	flag.Parse()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, *frames); err != nil {
 		fmt.Fprintln(os.Stderr, "layer:", err)
@@ -85,11 +90,14 @@ func run(ctx context.Context, frames int) (err error) {
 		return fmt.Errorf("connect: %w", err)
 	}
 	a := &app{conn: conn, frames: frames, cursor: neferclient.CursorDefault}
+	// Shutdown order: close the connection first, which drops its descriptor
+	// watches and destroys every Wayland object, then free the renderer and
+	// its GPU resources (including the release eventfds).
 	defer func() {
+		err = errors.Join(err, conn.Close())
 		if a.r != nil {
 			err = errors.Join(err, a.r.Close())
 		}
-		err = errors.Join(err, conn.Close())
 	}()
 	a.surf, err = conn.NewLayerSurface(neferclient.LayerConfig{
 		Level:    neferclient.LayerTop,
@@ -107,7 +115,7 @@ func run(ctx context.Context, frames int) (err error) {
 	for !a.done {
 		select {
 		case <-ctx.Done():
-			return nil
+			return nil // interrupt or SIGTERM: a clean exit
 		case <-conn.Wake():
 			if err = conn.Dispatch(a); err != nil {
 				return fmt.Errorf("dispatch: %w", err)
@@ -131,10 +139,19 @@ func run(ctx context.Context, frames int) (err error) {
 
 // FeedbackDone: dmabuf feedback → nefergui.RendererConfig. The renderer opens
 // the compositor's main device and picks a format and modifier from the list.
+//
+// Only the first complete feedback is used. A later one (the compositor
+// changing its preferred device or formats) is ignored: this demo assumes a
+// single GPU, and rebuilding the renderer is application policy that would
+// obscure the glue. A real application would create a new Renderer and
+// re-import its buffers here.
 func (a *app) FeedbackDone(neferclient.SurfaceID) { a.setup() }
 
 func (a *app) Configure(neferclient.SurfaceID, int32, int32) {
-	a.configured, a.canPresent = true, true
+	if !a.configured { // later configures must not lift the frame-callback gate
+		a.canPresent = true
+	}
+	a.configured = true
 	a.resize()
 	a.setup()
 }
@@ -240,7 +257,7 @@ func (a *app) Key(ev *neferclient.KeyEvent) {
 		Text:      ev.Text, // valid only during the call, as for Input
 		Pressed:   ev.Pressed,
 		Repeat:    ev.Repeat,
-		Modifiers: nefergui.Modifiers(ev.Modifiers & 0x0f), // shift, ctrl, alt, super
+		Modifiers: nefergui.Modifiers(ev.Modifiers & guiMods),
 	})
 }
 
@@ -283,6 +300,10 @@ func (a *app) present() error {
 		}
 		if err := a.surf.DestroyBuffer(rt.Buffer); err != nil {
 			return fmt.Errorf("destroy retired buffer %d: %w", rt.Buffer, err)
+		}
+		// The release timeline of a buffer is imported under the buffer's id.
+		if err := a.surf.DestroyTimeline(rt.Buffer); err != nil {
+			return fmt.Errorf("destroy retired timeline %d: %w", rt.Buffer, err)
 		}
 	}
 	if out.NewBuffer {
