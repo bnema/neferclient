@@ -4,9 +4,11 @@ import (
 	"context"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 
 	"github.com/bnema/neferclient"
 	neferclientmocks "github.com/bnema/neferclient/mocks"
@@ -134,4 +136,111 @@ func TestHeadlessSeat(t *testing.T) {
 	require.NoError(t, c.Dispatch(h))
 	require.NoError(t, seat.SetCursor(neferclient.CursorPointer))
 	require.NoError(t, s.Close())
+}
+
+// newUdmabuf returns a linear DMA-BUF made from a udmabuf; the test is skipped
+// when the machine lacks /dev/udmabuf.
+func newUdmabuf(t *testing.T, w, h int) int {
+	t.Helper()
+	size := (w*h*4 + 4095) &^ 4095
+	mem, err := unix.MemfdCreate("udmabuf", unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = unix.Close(mem) })
+	require.NoError(t, unix.Ftruncate(mem, int64(size)))
+	_, err = unix.FcntlInt(uintptr(mem), unix.F_ADD_SEALS, unix.F_SEAL_SHRINK)
+	require.NoError(t, err)
+	dev, err := unix.Open("/dev/udmabuf", unix.O_RDWR|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Skipf("no udmabuf: %v", err)
+	}
+	defer unix.Close(dev)
+	req := struct {
+		memfd, flags uint32
+		offset, size uint64
+	}{memfd: uint32(mem), size: uint64(size)}
+	fd, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(dev), 0x40187542, uintptr(unsafe.Pointer(&req)))
+	if errno != 0 {
+		t.Skipf("UDMABUF_CREATE: %v", errno)
+	}
+	t.Cleanup(func() { _ = unix.Close(int(fd)) })
+	return int(fd)
+}
+
+// newSyncobjFD returns an exported DRM syncobj for use as a timeline; the test
+// is skipped when there is no render node.
+func newSyncobjFD(t *testing.T) int {
+	t.Helper()
+	dev, err := unix.Open("/dev/dri/renderD128", unix.O_RDWR|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Skipf("no render node: %v", err)
+	}
+	defer unix.Close(dev)
+	create := struct{ handle, flags uint32 }{}
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(dev), 0xC00864BF, uintptr(unsafe.Pointer(&create))); errno != 0 {
+		t.Skipf("SYNCOBJ_CREATE: %v", errno)
+	}
+	exp := struct {
+		handle, flags uint32
+		fd, pad       int32
+	}{handle: create.handle, fd: -1}
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(dev), 0xC02064C1, uintptr(unsafe.Pointer(&exp))); errno != 0 {
+		t.Skipf("SYNCOBJ_HANDLE_TO_FD: %v", errno)
+	}
+	t.Cleanup(func() { _ = unix.Close(int(exp.fd)) })
+	return int(exp.fd)
+}
+
+// TestHeadlessReconfigureWhilePending drops every import of a mapped surface
+// while its frame callback is pending, imports again and presents again: the
+// compositor must raise no protocol error (the connection stays usable) and
+// the frame still arrives.
+func TestHeadlessReconfigureWhilePending(t *testing.T) {
+	c := connectHeadless(t)
+	const w, h = 200, 50
+	s, err := c.NewLayerSurface(neferclient.LayerConfig{
+		Level: neferclient.LayerTop, Anchors: neferclient.AnchorTop | neferclient.AnchorLeft, Width: w, Height: h,
+	})
+	require.NoError(t, err)
+	var configured, feedback bool
+	var frames int
+	hd := neferclientmocks.NewMockHandler(t)
+	hd.EXPECT().Configure(s.ID(), mock.Anything, mock.Anything).Run(func(neferclient.SurfaceID, int32, int32) { configured = true }).Return().Maybe()
+	hd.EXPECT().FeedbackDone(s.ID()).Run(func(neferclient.SurfaceID) { feedback = true }).Return().Maybe()
+	hd.EXPECT().Scale(s.ID(), mock.Anything).Return().Maybe()
+	hd.EXPECT().Frame(s.ID()).Run(func(neferclient.SurfaceID) { frames++ }).Return().Maybe()
+	dispatchUntil(t, c, hd, func() bool { return configured && feedback })
+	pw, ph, err := s.PhysicalSize()
+	require.NoError(t, err)
+
+	dmabuf := newUdmabuf(t, int(pw), int(ph))
+	timeline := newSyncobjFD(t)
+	point := uint64(0)
+	imports := func() {
+		t.Helper()
+		for id := uint64(1); id <= 2; id++ {
+			require.NoError(t, s.ImportBuffer(id, &neferclient.Buffer{Width: pw, Height: ph, FourCC: 0x34325258, PlaneCount: 1,
+				Planes: [4]neferclient.Plane{{FD: dmabuf, Stride: uint32(pw) * 4}}}))
+			require.NoError(t, s.ImportTimeline(id, timeline))
+		}
+	}
+	present := func() {
+		t.Helper()
+		point++
+		require.NoError(t, s.Present(&neferclient.Present{Buffer: 1, AcquireTimeline: 1, ReleaseTimeline: 2,
+			AcquirePoint: point, ReleasePoint: point + 1000, Opaque: true}))
+	}
+	imports()
+	present()
+	// No Dispatch ran since the commit: its frame is pending for the library.
+	require.Error(t, s.Present(&neferclient.Present{Buffer: 1, AcquireTimeline: 1, ReleaseTimeline: 2}))
+	require.NoError(t, s.DestroyImports())
+	require.NoError(t, c.Roundtrip()) // a protocol error would fail here
+	dispatchUntil(t, c, hd, func() bool { return frames == 1 })
+	imports()
+	present()
+	dispatchUntil(t, c, hd, func() bool { return frames == 2 })
+	require.NoError(t, s.DestroyImports())
+	require.NoError(t, s.Close())
+	require.NoError(t, c.Roundtrip())
+	require.NoError(t, c.Dispatch(hd))
 }

@@ -140,6 +140,42 @@ func (s *Surface) DestroyTimeline(id uint64) error {
 	return nil
 }
 
+// DestroyImports destroys every imported buffer and timeline of the surface,
+// so a renderer built from older dmabuf feedback can be replaced by one that
+// imports its buffers again under any ids (the old ids are free afterwards).
+// It is safe while a frame is pending and when nothing is imported.
+//
+// Present refuses the old ids from now on, so nothing is sent on a destroyed
+// object. A frame callback already requested still fires and is delivered as
+// usual; the next Present waits for it as always. The compositor keeps the
+// content and the DMA-BUF references of a commit it already received: destroying
+// a wl_buffer or a timeline never withdraws a commit, and the descriptors were
+// duplicated at import, so none is closed twice. The caller still owns the
+// storage behind the buffers and must not reuse or free it before the release
+// points of the commits that used it signal (the explicit-sync rule).
+//
+// Every object is destroyed exactly once, even if a request fails; the errors
+// are joined. See [Feedback.Equal] and the package documentation.
+func (s *Surface) DestroyImports() error {
+	if s.closed || s.c.closed {
+		return ErrClosed
+	}
+	var errs []error
+	for id, b := range s.buffers {
+		delete(s.buffers, id)
+		if err := b.buf.Destroy(); err != nil {
+			errs = append(errs, fmt.Errorf("neferclient: destroy buffer %d: %w", id, err))
+		}
+	}
+	for id, t := range s.timelines {
+		delete(s.timelines, id)
+		if err := t.Destroy(); err != nil {
+			errs = append(errs, fmt.Errorf("neferclient: destroy timeline %d: %w", id, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // Present commits an imported buffer. It refuses before the first configure,
 // before the first complete dmabuf feedback and while the previous frame
 // callback is pending.
