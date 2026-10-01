@@ -13,3 +13,15 @@ packages:
       filename: '{{.InterfaceFile | base | trimSuffix ".go"}}_mock.go'
     interfaces:
       Handler:
+        configs:
+          - dir: mocks
+            pkgname: neferclientmocks
+            filename: handler_mock.go
+          - dir: .
+            pkgname: neferclient
+            filename: handler_mock_test.go
+      surfaceRequests:
+        config:
+          dir: .
+          pkgname: neferclient
+          filename: surface_mock_test.go

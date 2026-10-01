@@ -2,10 +2,9 @@
 // github.com/vektra/mockery
 // template: testify
 
-package neferclientmocks
+package neferclient
 
 import (
-	"github.com/bnema/neferclient"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -46,7 +45,7 @@ func (_m *MockHandler) EXPECT() *MockHandler_Expecter {
 }
 
 // Closed provides a mock function for the type MockHandler
-func (_mock *MockHandler) Closed(id neferclient.SurfaceID) {
+func (_mock *MockHandler) Closed(id SurfaceID) {
 	_mock.Called(id)
 	return
 }
@@ -57,16 +56,16 @@ type MockHandler_Closed_Call struct {
 }
 
 // Closed is a helper method to define mock.On call
-//   - id neferclient.SurfaceID
+//   - id SurfaceID
 func (_e *MockHandler_Expecter) Closed(id any) *MockHandler_Closed_Call {
 	return &MockHandler_Closed_Call{Call: _e.mock.On("Closed", id)}
 }
 
-func (_c *MockHandler_Closed_Call) Run(run func(id neferclient.SurfaceID)) *MockHandler_Closed_Call {
+func (_c *MockHandler_Closed_Call) Run(run func(id SurfaceID)) *MockHandler_Closed_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 neferclient.SurfaceID
+		var arg0 SurfaceID
 		if args[0] != nil {
-			arg0 = args[0].(neferclient.SurfaceID)
+			arg0 = args[0].(SurfaceID)
 		}
 		run(
 			arg0,
@@ -80,13 +79,13 @@ func (_c *MockHandler_Closed_Call) Return() *MockHandler_Closed_Call {
 	return _c
 }
 
-func (_c *MockHandler_Closed_Call) RunAndReturn(run func(id neferclient.SurfaceID)) *MockHandler_Closed_Call {
+func (_c *MockHandler_Closed_Call) RunAndReturn(run func(id SurfaceID)) *MockHandler_Closed_Call {
 	_c.Run(run)
 	return _c
 }
 
 // Configure provides a mock function for the type MockHandler
-func (_mock *MockHandler) Configure(id neferclient.SurfaceID, width int32, height int32) {
+func (_mock *MockHandler) Configure(id SurfaceID, width int32, height int32) {
 	_mock.Called(id, width, height)
 	return
 }
@@ -97,18 +96,18 @@ type MockHandler_Configure_Call struct {
 }
 
 // Configure is a helper method to define mock.On call
-//   - id neferclient.SurfaceID
+//   - id SurfaceID
 //   - width int32
 //   - height int32
 func (_e *MockHandler_Expecter) Configure(id any, width any, height any) *MockHandler_Configure_Call {
 	return &MockHandler_Configure_Call{Call: _e.mock.On("Configure", id, width, height)}
 }
 
-func (_c *MockHandler_Configure_Call) Run(run func(id neferclient.SurfaceID, width int32, height int32)) *MockHandler_Configure_Call {
+func (_c *MockHandler_Configure_Call) Run(run func(id SurfaceID, width int32, height int32)) *MockHandler_Configure_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 neferclient.SurfaceID
+		var arg0 SurfaceID
 		if args[0] != nil {
-			arg0 = args[0].(neferclient.SurfaceID)
+			arg0 = args[0].(SurfaceID)
 		}
 		var arg1 int32
 		if args[1] != nil {
@@ -132,7 +131,7 @@ func (_c *MockHandler_Configure_Call) Return() *MockHandler_Configure_Call {
 	return _c
 }
 
-func (_c *MockHandler_Configure_Call) RunAndReturn(run func(id neferclient.SurfaceID, width int32, height int32)) *MockHandler_Configure_Call {
+func (_c *MockHandler_Configure_Call) RunAndReturn(run func(id SurfaceID, width int32, height int32)) *MockHandler_Configure_Call {
 	_c.Run(run)
 	return _c
 }
@@ -218,7 +217,7 @@ func (_c *MockHandler_FDReady_Call) RunAndReturn(run func(id uint64)) *MockHandl
 }
 
 // FeedbackDone provides a mock function for the type MockHandler
-func (_mock *MockHandler) FeedbackDone(id neferclient.SurfaceID) {
+func (_mock *MockHandler) FeedbackDone(id SurfaceID) {
 	_mock.Called(id)
 	return
 }
@@ -229,16 +228,16 @@ type MockHandler_FeedbackDone_Call struct {
 }
 
 // FeedbackDone is a helper method to define mock.On call
-//   - id neferclient.SurfaceID
+//   - id SurfaceID
 func (_e *MockHandler_Expecter) FeedbackDone(id any) *MockHandler_FeedbackDone_Call {
 	return &MockHandler_FeedbackDone_Call{Call: _e.mock.On("FeedbackDone", id)}
 }
 
-func (_c *MockHandler_FeedbackDone_Call) Run(run func(id neferclient.SurfaceID)) *MockHandler_FeedbackDone_Call {
+func (_c *MockHandler_FeedbackDone_Call) Run(run func(id SurfaceID)) *MockHandler_FeedbackDone_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 neferclient.SurfaceID
+		var arg0 SurfaceID
 		if args[0] != nil {
-			arg0 = args[0].(neferclient.SurfaceID)
+			arg0 = args[0].(SurfaceID)
 		}
 		run(
 			arg0,
@@ -252,13 +251,13 @@ func (_c *MockHandler_FeedbackDone_Call) Return() *MockHandler_FeedbackDone_Call
 	return _c
 }
 
-func (_c *MockHandler_FeedbackDone_Call) RunAndReturn(run func(id neferclient.SurfaceID)) *MockHandler_FeedbackDone_Call {
+func (_c *MockHandler_FeedbackDone_Call) RunAndReturn(run func(id SurfaceID)) *MockHandler_FeedbackDone_Call {
 	_c.Run(run)
 	return _c
 }
 
 // Frame provides a mock function for the type MockHandler
-func (_mock *MockHandler) Frame(id neferclient.SurfaceID) {
+func (_mock *MockHandler) Frame(id SurfaceID) {
 	_mock.Called(id)
 	return
 }
@@ -269,16 +268,16 @@ type MockHandler_Frame_Call struct {
 }
 
 // Frame is a helper method to define mock.On call
-//   - id neferclient.SurfaceID
+//   - id SurfaceID
 func (_e *MockHandler_Expecter) Frame(id any) *MockHandler_Frame_Call {
 	return &MockHandler_Frame_Call{Call: _e.mock.On("Frame", id)}
 }
 
-func (_c *MockHandler_Frame_Call) Run(run func(id neferclient.SurfaceID)) *MockHandler_Frame_Call {
+func (_c *MockHandler_Frame_Call) Run(run func(id SurfaceID)) *MockHandler_Frame_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 neferclient.SurfaceID
+		var arg0 SurfaceID
 		if args[0] != nil {
-			arg0 = args[0].(neferclient.SurfaceID)
+			arg0 = args[0].(SurfaceID)
 		}
 		run(
 			arg0,
@@ -292,7 +291,7 @@ func (_c *MockHandler_Frame_Call) Return() *MockHandler_Frame_Call {
 	return _c
 }
 
-func (_c *MockHandler_Frame_Call) RunAndReturn(run func(id neferclient.SurfaceID)) *MockHandler_Frame_Call {
+func (_c *MockHandler_Frame_Call) RunAndReturn(run func(id SurfaceID)) *MockHandler_Frame_Call {
 	_c.Run(run)
 	return _c
 }
@@ -364,7 +363,7 @@ func (_c *MockHandler_Locked_Call) RunAndReturn(run func()) *MockHandler_Locked_
 }
 
 // OutputAdded provides a mock function for the type MockHandler
-func (_mock *MockHandler) OutputAdded(out *neferclient.Output) {
+func (_mock *MockHandler) OutputAdded(out *Output) {
 	_mock.Called(out)
 	return
 }
@@ -375,16 +374,16 @@ type MockHandler_OutputAdded_Call struct {
 }
 
 // OutputAdded is a helper method to define mock.On call
-//   - out *neferclient.Output
+//   - out *Output
 func (_e *MockHandler_Expecter) OutputAdded(out any) *MockHandler_OutputAdded_Call {
 	return &MockHandler_OutputAdded_Call{Call: _e.mock.On("OutputAdded", out)}
 }
 
-func (_c *MockHandler_OutputAdded_Call) Run(run func(out *neferclient.Output)) *MockHandler_OutputAdded_Call {
+func (_c *MockHandler_OutputAdded_Call) Run(run func(out *Output)) *MockHandler_OutputAdded_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 *neferclient.Output
+		var arg0 *Output
 		if args[0] != nil {
-			arg0 = args[0].(*neferclient.Output)
+			arg0 = args[0].(*Output)
 		}
 		run(
 			arg0,
@@ -398,7 +397,7 @@ func (_c *MockHandler_OutputAdded_Call) Return() *MockHandler_OutputAdded_Call {
 	return _c
 }
 
-func (_c *MockHandler_OutputAdded_Call) RunAndReturn(run func(out *neferclient.Output)) *MockHandler_OutputAdded_Call {
+func (_c *MockHandler_OutputAdded_Call) RunAndReturn(run func(out *Output)) *MockHandler_OutputAdded_Call {
 	_c.Run(run)
 	return _c
 }
@@ -444,7 +443,7 @@ func (_c *MockHandler_OutputRemoved_Call) RunAndReturn(run func(global uint32)) 
 }
 
 // Scale provides a mock function for the type MockHandler
-func (_mock *MockHandler) Scale(id neferclient.SurfaceID, scale float64) {
+func (_mock *MockHandler) Scale(id SurfaceID, scale float64) {
 	_mock.Called(id, scale)
 	return
 }
@@ -455,17 +454,17 @@ type MockHandler_Scale_Call struct {
 }
 
 // Scale is a helper method to define mock.On call
-//   - id neferclient.SurfaceID
+//   - id SurfaceID
 //   - scale float64
 func (_e *MockHandler_Expecter) Scale(id any, scale any) *MockHandler_Scale_Call {
 	return &MockHandler_Scale_Call{Call: _e.mock.On("Scale", id, scale)}
 }
 
-func (_c *MockHandler_Scale_Call) Run(run func(id neferclient.SurfaceID, scale float64)) *MockHandler_Scale_Call {
+func (_c *MockHandler_Scale_Call) Run(run func(id SurfaceID, scale float64)) *MockHandler_Scale_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 neferclient.SurfaceID
+		var arg0 SurfaceID
 		if args[0] != nil {
-			arg0 = args[0].(neferclient.SurfaceID)
+			arg0 = args[0].(SurfaceID)
 		}
 		var arg1 float64
 		if args[1] != nil {
@@ -484,7 +483,7 @@ func (_c *MockHandler_Scale_Call) Return() *MockHandler_Scale_Call {
 	return _c
 }
 
-func (_c *MockHandler_Scale_Call) RunAndReturn(run func(id neferclient.SurfaceID, scale float64)) *MockHandler_Scale_Call {
+func (_c *MockHandler_Scale_Call) RunAndReturn(run func(id SurfaceID, scale float64)) *MockHandler_Scale_Call {
 	_c.Run(run)
 	return _c
 }
