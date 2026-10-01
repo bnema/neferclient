@@ -137,11 +137,8 @@ func TestAllocPresent(t *testing.T) {
 	t.Logf("allocs per Present (requests only): %v", allocs)
 	require.Zero(t, allocs)
 
-	// The complete cycle adds the frame callback. wlturbo registers each
-	// server-created wl_callback with two sync.Map stores (Context.proxies and
-	// Display.objects) and a sync.Map store always allocates a node, so two
-	// allocations per frame are inherent to the transport (wlturbo is out of
-	// scope for this change). They are pinned so a regression above that shows.
+	// The complete cycle adds the frame callback, registered under a recycled
+	// ID in wlturbo's object tables.
 	s.UseWireRequests()
 	h := &countingHandler{}
 	cycle := func() {
@@ -158,8 +155,8 @@ func TestAllocPresent(t *testing.T) {
 		cycle()
 	}
 	full := testing.AllocsPerRun(100, cycle)
-	t.Logf("allocs per Present+frame round trip: %v (wlturbo callback registration)", full)
-	require.LessOrEqual(t, full, 2.0)
+	t.Logf("allocs per Present+frame round trip: %v", full)
+	require.Zero(t, full)
 	require.Positive(t, h.frames)
 	require.Zero(t, h.errs)
 }
