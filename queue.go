@@ -39,6 +39,26 @@ const (
 	evLocked             // id = lock generation
 	evLockFinished       // id = lock generation
 	evBadEvent           // id, a = badEvent code: the reader met a malformed event
+
+	// Seat events (kind >= evSeatCaps). Pointer and keyboard events carry the
+	// generation of the wl_pointer/wl_keyboard in version, so events of a
+	// released device that are still queued are ignored. global is a wl_surface
+	// object id where a surface is named.
+	evSeatCaps     // a = capabilities
+	evSeatBad      // a = bad code: a seat device event was malformed
+	evPtrEnter     // global = surface, serial, a, b = fixed x, y
+	evPtrLeave     // global = surface
+	evPtrMotion    // a, b = fixed x, y
+	evPtrButton    // flags = button, a = state
+	evPtrAxis      // flags = axis, a = fixed value
+	evPtrAxisValue // flags = axis, a = value120
+	evPtrAxisStop  // flags = axis
+	evKbKeymap     // fd = owned descriptor, flags = size, a = format
+	evKbEnter      // global = surface, serial
+	evKbLeave      // global = surface
+	evKbKey        // flags = evdev code, a = state
+	evKbModifiers  // flags = depressed, dev = latched | locked<<32, a = group
+	evKbRepeat     // a = rate, b = delay
 )
 
 // event is the only thing the reader and the epoll goroutine hand to the
@@ -60,7 +80,7 @@ type event struct {
 
 // hasFD reports whether the event owns a received descriptor that must be
 // closed if the event is dropped.
-func (e *event) hasFD() bool { return e.kind == evFeedbackTable && e.fd >= 0 }
+func (e *event) hasFD() bool { return (e.kind == evFeedbackTable || e.kind == evKbKeymap) && e.fd >= 0 }
 
 func (e *event) closeFD() {
 	if e.hasFD() {
@@ -150,7 +170,7 @@ func (q *queue) pop(ev *event) bool {
 		return false
 	}
 	*ev = q.ring[q.head]
-	q.ring[q.head].kind = 0 // ownership of a carried descriptor moved to ev
+	q.ring[q.head] = event{} // ownership of a carried descriptor moved to ev; leave no key data behind
 	q.head = (q.head + 1) % ringSize
 	full := q.n == ringSize
 	q.n--

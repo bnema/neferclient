@@ -297,6 +297,92 @@ func (_c *MockHandler_Frame_Call) RunAndReturn(run func(id neferclient.SurfaceID
 	return _c
 }
 
+// Key provides a mock function for the type MockHandler
+func (_mock *MockHandler) Key(ev *neferclient.KeyEvent) {
+	_mock.Called(ev)
+	return
+}
+
+// MockHandler_Key_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Key'
+type MockHandler_Key_Call struct {
+	*mock.Call
+}
+
+// Key is a helper method to define mock.On call
+//   - ev *neferclient.KeyEvent
+func (_e *MockHandler_Expecter) Key(ev any) *MockHandler_Key_Call {
+	return &MockHandler_Key_Call{Call: _e.mock.On("Key", ev)}
+}
+
+func (_c *MockHandler_Key_Call) Run(run func(ev *neferclient.KeyEvent)) *MockHandler_Key_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 *neferclient.KeyEvent
+		if args[0] != nil {
+			arg0 = args[0].(*neferclient.KeyEvent)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockHandler_Key_Call) Return() *MockHandler_Key_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockHandler_Key_Call) RunAndReturn(run func(ev *neferclient.KeyEvent)) *MockHandler_Key_Call {
+	_c.Run(run)
+	return _c
+}
+
+// KeyboardFocus provides a mock function for the type MockHandler
+func (_mock *MockHandler) KeyboardFocus(id neferclient.SurfaceID, focused bool) {
+	_mock.Called(id, focused)
+	return
+}
+
+// MockHandler_KeyboardFocus_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'KeyboardFocus'
+type MockHandler_KeyboardFocus_Call struct {
+	*mock.Call
+}
+
+// KeyboardFocus is a helper method to define mock.On call
+//   - id neferclient.SurfaceID
+//   - focused bool
+func (_e *MockHandler_Expecter) KeyboardFocus(id any, focused any) *MockHandler_KeyboardFocus_Call {
+	return &MockHandler_KeyboardFocus_Call{Call: _e.mock.On("KeyboardFocus", id, focused)}
+}
+
+func (_c *MockHandler_KeyboardFocus_Call) Run(run func(id neferclient.SurfaceID, focused bool)) *MockHandler_KeyboardFocus_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 neferclient.SurfaceID
+		if args[0] != nil {
+			arg0 = args[0].(neferclient.SurfaceID)
+		}
+		var arg1 bool
+		if args[1] != nil {
+			arg1 = args[1].(bool)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockHandler_KeyboardFocus_Call) Return() *MockHandler_KeyboardFocus_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockHandler_KeyboardFocus_Call) RunAndReturn(run func(id neferclient.SurfaceID, focused bool)) *MockHandler_KeyboardFocus_Call {
+	_c.Run(run)
+	return _c
+}
+
 // LockFinished provides a mock function for the type MockHandler
 func (_mock *MockHandler) LockFinished() {
 	_mock.Called()
@@ -443,6 +529,46 @@ func (_c *MockHandler_OutputRemoved_Call) RunAndReturn(run func(global uint32)) 
 	return _c
 }
 
+// Pointer provides a mock function for the type MockHandler
+func (_mock *MockHandler) Pointer(ev *neferclient.PointerEvent) {
+	_mock.Called(ev)
+	return
+}
+
+// MockHandler_Pointer_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Pointer'
+type MockHandler_Pointer_Call struct {
+	*mock.Call
+}
+
+// Pointer is a helper method to define mock.On call
+//   - ev *neferclient.PointerEvent
+func (_e *MockHandler_Expecter) Pointer(ev any) *MockHandler_Pointer_Call {
+	return &MockHandler_Pointer_Call{Call: _e.mock.On("Pointer", ev)}
+}
+
+func (_c *MockHandler_Pointer_Call) Run(run func(ev *neferclient.PointerEvent)) *MockHandler_Pointer_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 *neferclient.PointerEvent
+		if args[0] != nil {
+			arg0 = args[0].(*neferclient.PointerEvent)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockHandler_Pointer_Call) Return() *MockHandler_Pointer_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockHandler_Pointer_Call) RunAndReturn(run func(ev *neferclient.PointerEvent)) *MockHandler_Pointer_Call {
+	_c.Run(run)
+	return _c
+}
+
 // Scale provides a mock function for the type MockHandler
 func (_mock *MockHandler) Scale(id neferclient.SurfaceID, scale float64) {
 	_mock.Called(id, scale)
@@ -485,6 +611,46 @@ func (_c *MockHandler_Scale_Call) Return() *MockHandler_Scale_Call {
 }
 
 func (_c *MockHandler_Scale_Call) RunAndReturn(run func(id neferclient.SurfaceID, scale float64)) *MockHandler_Scale_Call {
+	_c.Run(run)
+	return _c
+}
+
+// SecretChanged provides a mock function for the type MockHandler
+func (_mock *MockHandler) SecretChanged(count int) {
+	_mock.Called(count)
+	return
+}
+
+// MockHandler_SecretChanged_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SecretChanged'
+type MockHandler_SecretChanged_Call struct {
+	*mock.Call
+}
+
+// SecretChanged is a helper method to define mock.On call
+//   - count int
+func (_e *MockHandler_Expecter) SecretChanged(count any) *MockHandler_SecretChanged_Call {
+	return &MockHandler_SecretChanged_Call{Call: _e.mock.On("SecretChanged", count)}
+}
+
+func (_c *MockHandler_SecretChanged_Call) Run(run func(count int)) *MockHandler_SecretChanged_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int
+		if args[0] != nil {
+			arg0 = args[0].(int)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockHandler_SecretChanged_Call) Return() *MockHandler_SecretChanged_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockHandler_SecretChanged_Call) RunAndReturn(run func(count int)) *MockHandler_SecretChanged_Call {
 	_c.Run(run)
 	return _c
 }

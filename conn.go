@@ -82,6 +82,8 @@ type Conn struct {
 	nextLock uint32
 	curLock  *Lock // the live session lock, if any
 	tableBuf []byte
+	seat     *Seat
+	seatErr  error // a seat bind failure, reported by the next Dispatch
 
 	ready       bool // Connect finished; announcements go to the Handler
 	dispatching bool
@@ -338,6 +340,10 @@ func (c *Conn) Dispatch(h Handler) error {
 	}
 	c.dispatching = true
 	defer func() { c.dispatching = false }()
+	if err := c.seatErr; err != nil {
+		c.seatErr = nil
+		h.Error(err)
+	}
 	var ev event
 	for range ringSize {
 		if !c.q.pop(&ev) {
@@ -364,6 +370,7 @@ func (c *Conn) apply(ev *event, h Handler) {
 		}
 	case evGlobalRemove:
 		c.removeOutput(ev.global, h)
+		c.seatGlobalRemoved(ev.global, h)
 	case evOutputName:
 		if o := c.entry(ev.global); o != nil {
 			o.nameLen = copy(o.nameBuf[:], ev.nameBytes())
@@ -381,6 +388,10 @@ func (c *Conn) apply(ev *event, h Handler) {
 			c.commitOutput(o, h)
 		}
 	case evFDReady:
+		if c.seatTimer(ev.fd) {
+			c.seatRepeat(h)
+			return
+		}
 		id, ok := c.watched[ev.fd]
 		if !ok {
 			return // unwatched while the event was queued
@@ -395,6 +406,10 @@ func (c *Conn) apply(ev *event, h Handler) {
 			}
 		}
 	default:
+		if ev.kind >= evSeatCaps {
+			c.applySeat(ev, h)
+			return
+		}
 		c.applySurface(ev, h)
 	}
 }
@@ -590,6 +605,7 @@ func (c *Conn) Close() error {
 	if c.efd >= 0 {
 		_ = unix.Close(c.efd)
 	}
+	c.closeSeat()
 	c.q.closeFDs() // both producers are gone: close what nobody will drain
 	return err
 }

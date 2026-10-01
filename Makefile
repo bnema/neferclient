@@ -1,7 +1,9 @@
-.PHONY: build test vet race mocks mocks-check fakes-check perf-check check
+.PHONY: build clean-build test vet race mocks mocks-check fakes-check perf-check check
 
 build:
 	CGO_ENABLED=0 go build ./...
+clean-build:
+	GOWORK=off CGO_ENABLED=0 go build ./...
 test:
 	CGO_ENABLED=0 go test ./...
 vet:
@@ -18,5 +20,5 @@ fakes-check:
 	[ $$rc -eq 1 ] || { [ $$rc -eq 0 ] && printf '%s\n' 'handwritten test double: generate with Mockery v3' >&2; exit 1; }
 perf-check:
 	CGO_ENABLED=0 go test -run 'TestAlloc' -count=1 ./...
-check: build vet test fakes-check perf-check
+check: build clean-build vet test fakes-check perf-check
 	CGO_ENABLED=0 staticcheck ./...
