@@ -126,14 +126,14 @@ func TestKeyboardComposeAndFocus(t *testing.T) {
 
 	pressKey(t, k, keyCircum)
 	k.setFocus(false)
-	_, ok := pressKey2(k, keyE)
+	_, ok := pressUnchecked(k, keyE)
 	require.False(t, ok, "no key without focus")
 	k.setFocus(true)
 	ev, _ := pressKey(t, k, keyE)
 	require.Equal(t, "e", string(ev.Text), "focus loss resets compose")
 }
 
-func pressKey2(k *keyboard, code uint32) (KeyEvent, bool) {
+func pressUnchecked(k *keyboard, code uint32) (KeyEvent, bool) {
 	var ev KeyEvent
 	ok, _ := k.press(code, &ev)
 	return ev, ok
@@ -193,16 +193,27 @@ func TestSecretKeysNeverReachText(t *testing.T) {
 		ev, ok := pressKey(t, k, code)
 		require.True(t, ok)
 		require.Nil(t, ev.Text, "secret mode never fills KeyEvent.Text")
-		releaseKey(k, code)
+		rel, ok := releaseKey(k, code)
+		require.True(t, ok)
+		require.Equal(t, ev.Secret, rel.Secret, "the release is hidden like the press")
+		if ev.Secret {
+			require.Zero(t, rel.Keycode)
+			require.Zero(t, rel.Keysym)
+		}
 		return ev
 	}
-	press(keyQ)
-	press(keyCircum) // dead key
-	press(keyE)      // composes ê
+	for _, code := range []uint32{keyQ, keyCircum, keyE} { // text, dead key, composed ê
+		ev := press(code)
+		require.True(t, ev.Secret, "text keys are hidden")
+		require.Zero(t, ev.Keycode)
+		require.Zero(t, ev.Keysym)
+	}
 	require.Equal(t, "qê", string(buf.Bytes()))
 	require.Equal(t, 2, buf.Len())
 
-	press(keyBackspace)
+	bs := press(keyBackspace)
+	require.False(t, bs.Secret)
+	require.Equal(t, uint32(raw.XKB_KEY_BackSpace), bs.Keysym, "BackSpace keeps its keysym")
 	require.Equal(t, 1, buf.Len(), "backspace removes one code point")
 	press(keyBackspace)
 	press(keyBackspace) // empty: nothing to remove
@@ -210,6 +221,7 @@ func TestSecretKeysNeverReachText(t *testing.T) {
 
 	press(keyQ)
 	enter := press(keyEnter)
+	require.False(t, enter.Secret)
 	require.Equal(t, uint32(raw.XKB_KEY_Return), enter.Keysym)
 	require.Equal(t, 1, buf.Len(), "Enter is delivered, not typed")
 
@@ -218,6 +230,8 @@ func TestSecretKeysNeverReachText(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, k.setMask(1<<idx, 0, 0, 0))
 	ev := press(keyU)
+	require.False(t, ev.Secret)
+	require.NotZero(t, ev.Keysym, "Control combinations keep their keysym")
 	require.Equal(t, ModCtrl, ev.Modifiers)
 	require.Equal(t, 1, buf.Len())
 	require.NoError(t, k.setMask(0, 0, 0, 0))
@@ -228,11 +242,16 @@ func TestSecretKeysNeverReachText(t *testing.T) {
 	}
 	require.Equal(t, 8, buf.Len())
 
-	// Scratch is wiped after use.
+	// Scratch and the work area are wiped after use.
 	require.Equal(t, make([]byte, scratchSize), k.scratch[:])
+	require.Equal(t, secretWork{}, k.w)
+	for _, h := range k.held {
+		require.Zero(t, h, "no stale held key")
+	}
 
 	k.setSecret(nil)
 	ev, _ = pressKey(t, k, keyQ)
+	require.False(t, ev.Secret)
 	require.Equal(t, "q", string(ev.Text), "ordinary text again once the buffer is removed")
 }
 
@@ -280,4 +299,44 @@ func TestSecretRepeat(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, 1, buf.Len())
+}
+
+func TestSecretRepeatIsHiddenToo(t *testing.T) {
+	k := testKeyboard(t, "C", "us")
+	k.setSecret(NewSecretBuffer(8))
+	k.setRepeat(100, 1)
+	pressKey(t, k, keyQ)
+	require.Eventually(t, k.expired, 2e9, 1e6)
+	var ev KeyEvent
+	ok, err := k.repeat(&ev)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.True(t, ev.Secret)
+	require.Zero(t, ev.Keycode)
+	require.Zero(t, ev.Keysym)
+}
+
+func TestKeyboardHeldTailAndResetAreCleared(t *testing.T) {
+	k := testKeyboard(t, "C", "us")
+	k.setSecret(NewSecretBuffer(8))
+	pressKey(t, k, keyQ)
+	pressKey(t, k, keyE)
+	releaseKey(k, keyQ)
+	require.Equal(t, heldKey{}, k.held[:cap(k.held)][1], "vacated slot cleared")
+	k.setFocus(false)
+	for _, h := range k.held[:cap(k.held)] {
+		require.Zero(t, h)
+	}
+}
+
+func TestKeyboardIdenticalMaskIsNoOp(t *testing.T) {
+	k := testKeyboard(t, "C", "us")
+	idx, err := k.keymap.ModIndex("Shift")
+	require.NoError(t, err)
+	require.NoError(t, k.setMask(1<<idx, 0, 0, 0))
+	require.Equal(t, ModShift, k.mods)
+	require.NoError(t, k.setMask(1<<idx, 0, 0, 0))
+	require.Equal(t, ModShift, k.mods)
+	require.NoError(t, k.setMask(0, 0, 0, 0))
+	require.Zero(t, k.mods)
 }

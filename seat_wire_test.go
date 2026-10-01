@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -282,12 +283,19 @@ func TestSeatKeymapFDClosedOnClose(t *testing.T) {
 	require.Equal(t, without, run(true), "descriptor closed with the connection")
 }
 
-// TestSeatKeymapFDClosedOnBadFormat: an unsupported keymap is closed, not leaked.
+// TestSeatKeymapFDClosedOnBadFormat: an unknown keymap format is reported and
+// its descriptor closed; no_keymap (0) is closed silently.
 func TestSeatKeymapFDClosedOnBadFormat(t *testing.T) {
 	c, _, peer, _ := seatSetup(t)
 	_, kb := peer.ids()
 	before := openFDs(t)
-	peer.keymap(kb, 0) // XKB_V1 is 1; 0 is no_keymap
+
+	peer.keymap(kb, 0) // no_keymap: no error, no leak
+	require.NoError(t, c.Roundtrip())
+	require.NoError(t, c.Dispatch(neferclientmocks.NewMockHandler(t))) // any Handler call fails
+	require.Equal(t, before, openFDs(t))
+
+	peer.keymap(kb, 7) // unknown format
 	require.NoError(t, c.Roundtrip())
 	var errs int
 	h := neferclientmocks.NewMockHandler(t)
@@ -320,7 +328,6 @@ func TestSeatCapabilityLossReleasesDevices(t *testing.T) {
 	peer.mu.Lock()
 	require.True(t, peer.pointerReleased)
 	peer.mu.Unlock()
-	_ = srv
 }
 
 // TestSeatRepeatThroughEpoll: the repeat timerfd is watched by the connection's
@@ -350,9 +357,7 @@ func TestSeatRepeatThroughEpoll(t *testing.T) {
 	require.NoError(t, c.Roundtrip())
 	require.NoError(t, c.Dispatch(h))
 	n := repeats
-	for range 5 {
-		runtime.Gosched()
-	}
+	time.Sleep(50 * time.Millisecond) // five repeat intervals at 100/s
 	require.NoError(t, c.Dispatch(h))
 	require.Equal(t, n, repeats, "release stops the repeat")
 }
@@ -365,6 +370,10 @@ func TestSeatRepeatThroughEpoll(t *testing.T) {
 // the zero-allocation guard below proves that. The bound pins the binding's
 // cost so a regression above it shows.
 const xkbAllocsPerPress = 20
+
+// xkbAllocsPerMask bounds a mask change: update_mask, serialize_mods and
+// serialize_layout, boxed the same way.
+const xkbAllocsPerMask = 12
 
 // TestAllocKey measures the steady-state key path over a real socketpair, on
 // the real code path (no mocks): key frames in, reader decode, queue, Dispatch
@@ -425,6 +434,23 @@ func TestAllocKey(t *testing.T) {
 	require.LessOrEqual(t, text, float64(pairs*xkbAllocsPerPress))
 	require.Equal(t, "a", h.lastText)
 
+	// Modifier masks: an identical mask is a no-op and allocates nothing; a
+	// changing one updates the xkb state (purego-xkbcommon calls, bounded).
+	mods := func(depressed uint32) []byte {
+		b := appendU32(appendU32(nil, 1), depressed)
+		return frame(kb, 4, appendU32(appendU32(appendU32(b, 0), 0), 0))
+	}
+	var same, changing []byte
+	for range 100 {
+		same = append(same, mods(0)...)
+	}
+	for i := range 100 {
+		changing = append(changing, mods(uint32(i%2))...)
+	}
+	require.Zero(t, measure("modifiers, 100 identical masks", run(same, 100)), "identical masks cost nothing")
+	changes := measure("modifiers, 100 alternating masks", run(changing, 100))
+	require.LessOrEqual(t, changes, float64(100*xkbAllocsPerMask))
+
 	buf := neferclient.NewSecretBuffer(4096)
 	c.Seat().SetSecret(buf)
 	secret := measure("secret, 50 presses + releases", step)
@@ -432,5 +458,49 @@ func TestAllocKey(t *testing.T) {
 	require.Empty(t, h.lastText, "no text reaches the handler in secret mode")
 	require.Positive(t, buf.Len())
 	buf.Wipe()
+	require.Zero(t, h.errs)
+}
+
+// TestAllocPointer measures the pointer path over a real socketpair: a batch
+// of motion, button and axis frames in, reader decode, queue, Dispatch and the
+// Handler call. Pointer events need no xkb, so the whole path allocates
+// nothing.
+func TestAllocPointer(t *testing.T) {
+	skipUnderRace(t)
+	c, srv, peer, s := seatSetup(t)
+	pointer, _ := peer.ids()
+	enter := appendU32(appendU32(nil, 5), s.SurfaceObjectID())
+	srv.write(frame(pointer, 0, appendU32(appendU32(enter, fixed(1)), fixed(1))))
+	require.NoError(t, c.Roundtrip())
+	h := &countingHandler{}
+	require.NoError(t, c.Dispatch(h))
+	require.Equal(t, 1, h.pointers)
+
+	const rounds = 40
+	var batch []byte
+	for i := range rounds {
+		batch = append(batch, frame(pointer, 2, append(appendU32(appendU32(nil, 0), fixed(float64(i))), appendU32(nil, fixed(2))...))...)
+		batch = append(batch, frame(pointer, 3, appendU32(appendU32(appendU32(appendU32(nil, 6), 0), 0x110), uint32(i%2)))...)
+		batch = append(batch, frame(pointer, 4, appendU32(appendU32(appendU32(nil, 0), 0), fixed(2)))...)
+		batch = append(batch, frame(pointer, 9, appendU32(appendU32(nil, 0), 120))...)
+	}
+	step := func() {
+		if _, err := srv.conn.Write(batch); err != nil {
+			t.Fatal(err)
+		}
+		for c.QueueLen() < 4*rounds {
+			runtime.Gosched()
+		}
+		if err := c.Dispatch(h); err != nil {
+			t.Fatal(err)
+		}
+	}
+	step()
+	step()
+	before := h.pointers
+	allocs := testing.AllocsPerRun(20, step)
+	t.Logf("allocs per Dispatch of %d pointer events: %v", 4*rounds, allocs)
+	require.Zero(t, allocs)
+	require.Greater(t, h.pointers, before)
 	require.Zero(t, h.errs)
 }

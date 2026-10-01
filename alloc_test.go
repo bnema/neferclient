@@ -17,13 +17,15 @@ import (
 type countingHandler struct {
 	neferclient.NopHandler
 	fdReady, errs, frames int
-	keys                  int
+	keys, pointers        int
 	lastText              string // set only by the allocation-free comparison below
 }
 
 func (h *countingHandler) FDReady(uint64)              { h.fdReady++ }
 func (h *countingHandler) Error(error)                 { h.errs++ }
 func (h *countingHandler) Frame(neferclient.SurfaceID) { h.frames++ }
+
+func (h *countingHandler) Pointer(*neferclient.PointerEvent) { h.pointers++ }
 
 // Key records the text through a comparison that does not allocate: the
 // string is only built the first time a different text shows up.
