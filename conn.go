@@ -76,6 +76,13 @@ type Conn struct {
 	outputs []*outputEntry // sorted by Global
 	view    []Output       // reused by Outputs
 
+	g        globals // lazily bound protocol globals, owner only
+	surfaces map[SurfaceID]*Surface
+	nextSurf SurfaceID
+	nextLock uint32
+	curLock  *Lock // the live session lock, if any
+	tableBuf []byte
+
 	ready       bool // Connect finished; announcements go to the Handler
 	dispatching bool
 	closed      bool
@@ -137,6 +144,8 @@ func connectConn(ctx context.Context, sock net.Conn) (res *Conn, err error) {
 		efd:     -1,
 		epfd:    -1,
 		watched: make(map[int32]uint64),
+
+		surfaces: make(map[SurfaceID]*Surface),
 	}
 	watch := context.AfterFunc(ctx, func() { _ = display.Close() })
 	defer func() {
@@ -385,6 +394,8 @@ func (c *Conn) apply(ev *event, h Handler) {
 				h.Error(err)
 			}
 		}
+	default:
+		c.applySurface(ev, h)
 	}
 }
 
