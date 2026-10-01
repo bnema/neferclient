@@ -17,11 +17,22 @@ import (
 type countingHandler struct {
 	neferclient.NopHandler
 	fdReady, errs, frames int
+	keys                  int
+	lastText              string // set only by the allocation-free comparison below
 }
 
 func (h *countingHandler) FDReady(uint64)              { h.fdReady++ }
 func (h *countingHandler) Error(error)                 { h.errs++ }
 func (h *countingHandler) Frame(neferclient.SurfaceID) { h.frames++ }
+
+// Key records the text through a comparison that does not allocate: the
+// string is only built the first time a different text shows up.
+func (h *countingHandler) Key(ev *neferclient.KeyEvent) {
+	h.keys++
+	if string(ev.Text) != h.lastText && ev.Pressed {
+		h.lastText = string(ev.Text)
+	}
+}
 
 // TestAllocDispatch measures the whole steady-state pipeline over a real
 // socketpair: wire frames in, reader decode, queue, Dispatch (output state

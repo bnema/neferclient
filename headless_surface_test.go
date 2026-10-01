@@ -104,3 +104,34 @@ func TestHeadlessLockUnlock(t *testing.T) {
 	}
 	require.NoError(t, c.Roundtrip())
 }
+
+// TestHeadlessSeat binds the seat against a real compositor and drives it
+// through a surface: the seat bind, capability handling and cursor request
+// must not fail, whatever devices the headless backend offers.
+func TestHeadlessSeat(t *testing.T) {
+	c := connectHeadless(t)
+	s, err := c.NewLayerSurface(neferclient.LayerConfig{
+		Level: neferclient.LayerTop, Anchors: neferclient.AnchorTop | neferclient.AnchorLeft,
+		Width: 100, Height: 40, Keyboard: neferclient.KeyboardOnDemand,
+	})
+	require.NoError(t, err)
+	seat := c.Seat()
+	require.NotNil(t, seat)
+	seat.SetSecret(neferclient.NewSecretBuffer(16))
+	seat.SetSecret(nil)
+
+	var configured bool
+	h := neferclientmocks.NewMockHandler(t)
+	h.EXPECT().Configure(s.ID(), mock.Anything, mock.Anything).Run(func(neferclient.SurfaceID, int32, int32) { configured = true }).Return().Maybe()
+	h.EXPECT().FeedbackDone(mock.Anything).Return().Maybe()
+	h.EXPECT().Scale(mock.Anything, mock.Anything).Return().Maybe()
+	h.EXPECT().Pointer(mock.Anything).Return().Maybe()
+	h.EXPECT().Key(mock.Anything).Return().Maybe()
+	h.EXPECT().KeyboardFocus(mock.Anything, mock.Anything).Return().Maybe()
+	h.EXPECT().SecretChanged(mock.Anything).Return().Maybe()
+	dispatchUntil(t, c, h, func() bool { return configured })
+	require.NoError(t, c.Roundtrip())
+	require.NoError(t, c.Dispatch(h))
+	require.NoError(t, seat.SetCursor(neferclient.CursorPointer))
+	require.NoError(t, s.Close())
+}
