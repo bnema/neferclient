@@ -5,4 +5,11 @@ structname: '{{.Mock}}{{.InterfaceName}}'
 template: testify
 template-schema: '{{.Template}}.schema.json'
 require-template-schema-exists: true
-packages: {}
+packages:
+  github.com/bnema/neferclient:
+    config:
+      dir: mocks
+      pkgname: neferclientmocks
+      filename: '{{.InterfaceFile | base | trimSuffix ".go"}}_mock.go'
+    interfaces:
+      Handler:
