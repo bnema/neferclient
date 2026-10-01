@@ -133,94 +133,138 @@ func (s *Surface) Present(p *Present) error {
 	if !s.frameReady {
 		return errors.New("neferclient: frame callback pending")
 	}
-	buf, ok := s.buffers[p.Buffer]
-	if !ok {
+	if _, ok := s.buffers[p.Buffer]; !ok {
 		return fmt.Errorf("neferclient: unknown buffer %d", p.Buffer)
 	}
-	acq, ok := s.timelines[p.AcquireTimeline]
-	if !ok {
-		return fmt.Errorf("neferclient: unknown timeline %d", p.AcquireTimeline)
-	}
-	rel, ok := s.timelines[p.ReleaseTimeline]
-	if !ok {
-		return fmt.Errorf("neferclient: unknown timeline %d", p.ReleaseTimeline)
+	for _, id := range [...]uint64{p.AcquireTimeline, p.ReleaseTimeline} {
+		if _, ok := s.timelines[id]; !ok {
+			return fmt.Errorf("neferclient: unknown timeline %d", id)
+		}
 	}
 	pw, ph, err := s.PhysicalSize()
 	if err != nil {
 		return err
 	}
+	r := s.req
 	if s.viewport != nil {
 		if s.sentDestW != s.width || s.sentDestH != s.height {
-			if err = s.viewport.SetDestination(s.width, s.height); err != nil {
+			if err = r.setDestination(s.width, s.height); err != nil {
 				return err
 			}
 			s.sentDestW, s.sentDestH = s.width, s.height
 		}
 	} else if s.scale > 1 && s.sentBufScale != int32(s.scale) {
-		if err = s.surf.SetBufferScale(int32(s.scale)); err != nil {
+		if err = r.setBufferScale(int32(s.scale)); err != nil {
 			return err
 		}
 		s.sentBufScale = int32(s.scale)
 	}
-	if err = s.setOpaque(p.Opaque); err != nil {
+	if p.Opaque {
+		if !s.opaqueSet || s.opaqueW != s.width || s.opaqueH != s.height {
+			if err = r.setOpaqueRegion(s.width, s.height, true); err != nil {
+				return err
+			}
+			s.opaqueSet, s.opaqueW, s.opaqueH = true, s.width, s.height
+		}
+	} else if s.opaqueSet {
+		if err = r.setOpaqueRegion(0, 0, false); err != nil {
+			return err
+		}
+		s.opaqueSet = false
+	}
+	if err = r.setAcquire(p.AcquireTimeline, p.AcquirePoint); err != nil {
 		return err
 	}
-	if err = s.sync.SetAcquirePoint(acq, uint32(p.AcquirePoint>>32), uint32(p.AcquirePoint)); err != nil {
+	if err = r.setRelease(p.ReleaseTimeline, p.ReleasePoint); err != nil {
 		return err
 	}
-	if err = s.sync.SetReleasePoint(rel, uint32(p.ReleasePoint>>32), uint32(p.ReleasePoint)); err != nil {
-		return err
-	}
-	if err = s.surf.Attach(buf, 0, 0); err != nil {
+	if err = r.attach(p.Buffer); err != nil {
 		return err
 	}
 	if len(p.Damage) == 0 {
-		err = s.surf.DamageBuffer(0, 0, pw, ph)
+		err = r.damageBuffer(Rect{0, 0, pw, ph})
 	}
-	for _, r := range p.Damage {
+	for _, d := range p.Damage {
 		if err != nil {
 			break
 		}
-		err = s.surf.DamageBuffer(r.X, r.Y, r.Width, r.Height)
+		err = r.damageBuffer(d)
 	}
 	if err != nil {
 		return err
 	}
-	// The one frame callback object is reused: only one is ever pending.
-	if err = s.c.wlctx.RequestArgs(wl.Request{Proxy: s.surf, Opcode: 3, Name: "wl_surface.frame", Child: s.cb}, wl.ArgObject(s.cb)); err != nil {
+	if err = r.frame(); err != nil {
 		return err
 	}
-	if err = s.surf.Commit(); err != nil {
+	if err = r.commit(); err != nil {
 		return err
 	}
 	s.frameReady = false
 	return nil
 }
 
-// setOpaque keeps the opaque region equal to the full logical surface when
-// opaque, and empty otherwise, sending requests only on change.
-func (s *Surface) setOpaque(opaque bool) error {
+// surfaceRequests is the seam between the Present ordering rules and the
+// wire: the production implementation sends the protocol requests.
+type surfaceRequests interface {
+	setDestination(w, h int32) error
+	setBufferScale(n int32) error
+	setOpaqueRegion(w, h int32, opaque bool) error
+	setAcquire(timeline, point uint64) error
+	setRelease(timeline, point uint64) error
+	attach(buffer uint64) error
+	damageBuffer(r Rect) error
+	frame() error
+	commit() error
+}
+
+// wireRequests sends the requests. skipFrame is set by tests that isolate the
+// request path from the frame callback registration.
+type wireRequests struct {
+	s         *Surface
+	skipFrame bool
+}
+
+func (r wireRequests) setDestination(w, h int32) error { return r.s.viewport.SetDestination(w, h) }
+func (r wireRequests) setBufferScale(n int32) error    { return r.s.surf.SetBufferScale(n) }
+
+func (r wireRequests) setOpaqueRegion(w, h int32, opaque bool) error {
+	s := r.s
 	if !opaque {
-		if s.opaqueSet {
-			s.opaqueSet = false
-			return s.surf.SetOpaqueRegion(nil)
-		}
-		return nil
-	}
-	if s.opaqueSet && s.opaqueW == s.width && s.opaqueH == s.height {
-		return nil
+		return s.surf.SetOpaqueRegion(nil)
 	}
 	region, err := s.c.g.compositor.CreateRegion()
 	if err != nil {
 		return err
 	}
-	if err = region.Add(0, 0, s.width, s.height); err == nil {
+	if err = region.Add(0, 0, w, h); err == nil {
 		err = s.surf.SetOpaqueRegion(region)
 	}
 	_ = region.Destroy()
-	if err != nil {
-		return err
-	}
-	s.opaqueSet, s.opaqueW, s.opaqueH = true, s.width, s.height
-	return nil
+	return err
 }
+
+func (r wireRequests) setAcquire(timeline, point uint64) error {
+	return r.s.sync.SetAcquirePoint(r.s.timelines[timeline], uint32(point>>32), uint32(point))
+}
+
+func (r wireRequests) setRelease(timeline, point uint64) error {
+	return r.s.sync.SetReleasePoint(r.s.timelines[timeline], uint32(point>>32), uint32(point))
+}
+
+func (r wireRequests) attach(buffer uint64) error { return r.s.surf.Attach(r.s.buffers[buffer], 0, 0) }
+
+func (r wireRequests) damageBuffer(d Rect) error {
+	return r.s.surf.DamageBuffer(d.X, d.Y, d.Width, d.Height)
+}
+
+// frame requests the frame callback on the surface's single reusable
+// callback object: only one is ever pending.
+func (r wireRequests) frame() error {
+	s := r.s
+	if r.skipFrame {
+		return nil
+	}
+	return s.c.wlctx.RequestArgs(wl.Request{Proxy: s.surf, Opcode: 3, Name: "wl_surface.frame", Child: s.cb}, wl.ArgObject(s.cb))
+}
+
+func (r wireRequests) commit() error { return r.s.surf.Commit() }

@@ -118,7 +118,8 @@ type Surface struct {
 	opaque               *wayland.Region
 	opaqueW, opaqueH     int32
 
-	cb *frameCallback
+	cb  *frameCallback
+	req surfaceRequests
 
 	inputRects  []Rect
 	inputCustom bool
@@ -270,6 +271,7 @@ func (c *Conn) newSurface(role surfaceRole, w, h int32) (*Surface, error) {
 	// The role objects come next (callers); sync surface and feedback after.
 	s.cb = &frameCallback{q: q, id: s.id}
 	s.cb.SetContext(c.wlctx)
+	s.req = wireRequests{s: s}
 	c.surfaces[s.id] = s
 	ok = true
 	return s, nil

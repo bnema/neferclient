@@ -30,6 +30,7 @@ type wireServer struct {
 	globals  []wireGlobal
 	bound    map[uint32]boundObject // global name -> bound object
 	outputs  map[uint32]outputSpec
+	hook     func(obj uint32, op uint16, body []byte) // other requests, if set
 }
 
 type wireGlobal struct {
@@ -115,6 +116,7 @@ func isClosed(err error) bool {
 
 func (s *wireServer) serve() {
 	var hdr [8]byte
+	var buf []byte // reused: the peer must not allocate while draining
 	for {
 		if _, err := io.ReadFull(s.conn, hdr[:]); err != nil {
 			return
@@ -122,7 +124,10 @@ func (s *wireServer) serve() {
 		obj := binary.LittleEndian.Uint32(hdr[0:4])
 		w := binary.LittleEndian.Uint32(hdr[4:8])
 		size, op := int(w>>16), uint16(w)
-		body := make([]byte, size-8)
+		if cap(buf) < size-8 {
+			buf = make([]byte, size-8)
+		}
+		body := buf[:size-8]
 		if _, err := io.ReadFull(s.conn, body); err != nil {
 			return
 		}
@@ -165,8 +170,15 @@ func (s *wireServer) handle(obj uint32, op uint16, body []byte) {
 		if isOutput {
 			s.describe(id, version, spec)
 		}
-	case op == 0 && body == nil: // wl_output.release (destructor, no args)
+	case op == 0 && len(body) == 0: // wl_output.release (destructor, no args)
 		s.write(frame(1, 1, appendU32(nil, obj)))
+	default:
+		s.mu.Lock()
+		hook := s.hook
+		s.mu.Unlock()
+		if hook != nil {
+			hook(obj, op, body)
+		}
 	}
 }
 
