@@ -108,11 +108,10 @@ func TestHeadlessConnect(t *testing.T) {
 
 	// The compositor creates its virtual output just after the socket appears,
 	// so it may arrive through OutputAdded instead of being there at Connect.
-	h := &countingHandler{}
 	for len(c.Outputs()) == 0 {
 		select {
 		case <-c.Wake():
-			require.NoError(t, c.Dispatch(h))
+			require.NoError(t, c.Dispatch(nil))
 		case <-ctx.Done():
 			t.Fatal("no output announced")
 		}

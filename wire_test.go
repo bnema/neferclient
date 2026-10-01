@@ -3,6 +3,7 @@ package neferclient_test
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -108,21 +109,8 @@ func (s *wireServer) write(b []byte) {
 }
 
 func isClosed(err error) bool {
-	return err != nil && (err == io.EOF || err == net.ErrClosed || os.IsTimeout(err) || isConnReset(err))
-}
-
-func isConnReset(err error) bool {
-	for err != nil {
-		if err == unix.EPIPE || err == unix.ECONNRESET {
-			return true
-		}
-		u, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-		err = u.Unwrap()
-	}
-	return false
+	return errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) || errors.Is(err, os.ErrDeadlineExceeded) ||
+		errors.Is(err, unix.EPIPE) || errors.Is(err, unix.ECONNRESET)
 }
 
 func (s *wireServer) serve() {

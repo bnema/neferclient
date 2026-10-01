@@ -61,7 +61,9 @@ func TestConnectInitialOutputs(t *testing.T) {
 	assert.Equal(t, uint32(4), srv.waitBound(7).version, "bound at min(announced, 4)")
 	assert.Equal(t, uint32(2), srv.waitBound(9).version)
 
-	// Setup events are applied silently: nothing is left for the Handler.
+	// Setup events are applied silently: nothing is left for the Handler. The
+	// roundtrip moves everything handled so far into the ring, so a leaked
+	// setup event would reach the strict mock here.
 	h := neferclientmocks.NewMockHandler(t)
 	require.NoError(t, c.Roundtrip())
 	require.NoError(t, c.Dispatch(h))
@@ -118,15 +120,48 @@ func TestRingBackpressureKeepsOrder(t *testing.T) {
 	var buf []byte
 	for i := 1; i <= total; i++ {
 		buf = append(buf, frame(obj.id, 3, appendU32(nil, uint32(i)))...)
+		buf = append(buf, frame(obj.id, 2, nil)...)
 	}
-	buf = append(buf, frame(obj.id, 2, nil)...)
 	go srv.write(buf)
 	waitFor(t, func() bool { return c.QueueLen() == neferclient.RingSize }, "full ring")
 
 	// A pause (Roundtrip) must not deadlock against a producer blocked on the
-	// full ring, and must not reorder what it held back.
+	// full ring, and must not reorder what it held back: the visible scale
+	// only ever grows, ending at total.
 	require.NoError(t, c.Roundtrip())
-	dispatchUntil(t, c, nil, func() bool { return c.Outputs()[0].Scale == total })
+	prev := int32(0)
+	dispatchUntil(t, c, nil, func() bool {
+		got := c.Outputs()[0].Scale
+		require.GreaterOrEqual(t, got, prev, "scale went backwards: events were reordered")
+		prev = got
+		return got == total
+	})
+}
+
+func TestRoundtripQueuesEventsForNextDispatch(t *testing.T) {
+	c, srv := connectWire(t, []wireGlobal{{7, outputIface, 4}}, map[uint32]outputSpec{7: {"DP-1", 1, 100, 100}})
+	obj := srv.waitBound(7)
+	srv.write(frame(obj.id, 3, appendU32(nil, 4))) // scale 4
+	srv.write(frame(obj.id, 2, nil))               // done
+	require.NoError(t, c.Roundtrip())
+	// No Wake wait: the events handled during the roundtrip are already queued.
+	require.NoError(t, c.Dispatch(nil))
+	assert.Equal(t, int32(4), c.Outputs()[0].Scale)
+}
+
+func TestBindQueuesEventsForNextDispatch(t *testing.T) {
+	c, srv := connectWire(t, []wireGlobal{{7, outputIface, 4}, {3, wayland.CompositorInterface, 6}},
+		map[uint32]outputSpec{7: {"DP-1", 1, 100, 100}})
+	obj := srv.waitBound(7)
+	srv.write(frame(obj.id, 3, appendU32(nil, 2)))
+	srv.write(frame(obj.id, 2, nil))
+	// The bind pauses the reader; wait until the reader has the events so they
+	// are handled during the pause or before it, never after Bind returns.
+	waitFor(t, func() bool { return c.QueueLen() == 2 }, "events queued")
+	_, _, err := c.Bind[*wayland.Compositor](wayland.CompositorInterface, 4, wayland.NewCompositor)
+	require.NoError(t, err)
+	require.NoError(t, c.Dispatch(nil))
+	assert.Equal(t, int32(2), c.Outputs()[0].Scale)
 }
 
 func waitFor(t *testing.T, cond func() bool, what string) {
@@ -179,9 +214,42 @@ func TestWatchFD(t *testing.T) {
 
 	require.NoError(t, c.UnwatchFD(efd))
 	assert.Error(t, c.UnwatchFD(efd))
-	signal()
-	require.NoError(t, c.Roundtrip())
-	require.NoError(t, c.Dispatch(h)) // would fail the mock's Times(2)
+}
+
+func TestUnwatchDropsQueuedNotification(t *testing.T) {
+	c, _ := connectWire(t, nil, nil)
+	efd, err := unix.Eventfd(0, unix.EFD_CLOEXEC|unix.EFD_NONBLOCK)
+	require.NoError(t, err)
+	defer unix.Close(efd)
+	require.NoError(t, c.WatchFD(efd, 9))
+	one := [8]byte{1}
+	_, err = unix.Write(efd, one[:])
+	require.NoError(t, err)
+	waitFor(t, func() bool { return c.QueueLen() > 0 }, "queued fd notification")
+	require.NoError(t, c.UnwatchFD(efd))
+	h := neferclientmocks.NewMockHandler(t) // no FDReady expectation: a call fails
+	require.NoError(t, c.Dispatch(h))
+}
+
+func TestCloseInsideFDReady(t *testing.T) {
+	c, _ := connectWire(t, nil, nil)
+	efd, err := unix.Eventfd(0, unix.EFD_CLOEXEC|unix.EFD_NONBLOCK)
+	require.NoError(t, err)
+	defer unix.Close(efd)
+	require.NoError(t, c.WatchFD(efd, 1))
+	h := neferclientmocks.NewMockHandler(t) // Error must not be called after Close
+	h.EXPECT().FDReady(uint64(1)).Run(func(uint64) { require.NoError(t, c.Close()) }).Once()
+	one := [8]byte{1}
+	_, _ = unix.Write(efd, one[:])
+	waitFor(t, func() bool { return c.QueueLen() > 0 }, "queued fd notification")
+	assert.ErrorIs(t, c.Dispatch(h), neferclient.ErrClosed)
+}
+
+func TestOutputVersionOneIgnored(t *testing.T) {
+	c, _ := connectWire(t, []wireGlobal{{5, outputIface, 1}, {7, outputIface, 2}},
+		map[uint32]outputSpec{5: {"old", 1, 10, 10}, 7: {"DP-1", 1, 100, 100}})
+	require.Len(t, c.Outputs(), 1)
+	assert.Equal(t, uint32(7), c.Outputs()[0].Global)
 }
 
 func TestUnwatchInsideHandler(t *testing.T) {

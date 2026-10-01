@@ -12,16 +12,17 @@ import (
 
 // countingHandler is the measured system's input, not a double of a port: it
 // only counts, so the test sees the cost of the library alone.
-type countingHandler struct{ fdReady, added, removed, errs int }
+type countingHandler struct {
+	neferclient.NopHandler
+	fdReady, errs int
+}
 
-func (h *countingHandler) OutputAdded(*neferclient.Output) { h.added++ }
-func (h *countingHandler) OutputRemoved(uint32)            { h.removed++ }
-func (h *countingHandler) FDReady(uint64)                  { h.fdReady++ }
-func (h *countingHandler) Error(error)                     { h.errs++ }
+func (h *countingHandler) FDReady(uint64) { h.fdReady++ }
+func (h *countingHandler) Error(error)    { h.errs++ }
 
 // TestAllocDispatch measures the whole steady-state pipeline over a real
 // socketpair: wire frames in, reader decode, queue, Dispatch (output state
-// updates and a watched-fd notification with epoll re-arm). testing's
+// updates, an output commit and a watched-fd notification with epoll re-arm). testing's
 // AllocsPerRun counts every goroutine, so reader and epoll allocations are
 // included.
 func TestAllocDispatch(t *testing.T) {
@@ -34,6 +35,7 @@ func TestAllocDispatch(t *testing.T) {
 	for i := range scaleEvents {
 		batch = append(batch, frame(obj.id, 3, appendU32(nil, uint32(1+i%2)))...)
 	}
+	batch = append(batch, frame(obj.id, 2, nil)...) // wl_output.done: commitOutput runs
 	efd, err := unix.Eventfd(0, unix.EFD_CLOEXEC|unix.EFD_NONBLOCK)
 	require.NoError(t, err)
 	defer unix.Close(efd)
@@ -47,7 +49,7 @@ func TestAllocDispatch(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, _ = unix.Write(efd, one[:])
-		for c.QueueLen() < scaleEvents+1 {
+		for c.QueueLen() < scaleEvents+2 {
 			runtime.Gosched()
 		}
 		_, _ = unix.Read(efd, drain[:])
@@ -58,7 +60,7 @@ func TestAllocDispatch(t *testing.T) {
 	step() // warm-up beyond AllocsPerRun's own: grow pools and buffers
 	step()
 	allocs := testing.AllocsPerRun(50, step)
-	t.Logf("allocs per Dispatch of %d events: %v", scaleEvents+1, allocs)
+	t.Logf("allocs per Dispatch of %d events: %v", scaleEvents+2, allocs)
 	require.Zero(t, allocs)
 	require.Positive(t, h.fdReady)
 	require.Zero(t, h.errs)
