@@ -12,8 +12,9 @@
 // SecretBuffer.Len(). The program never converts the secret to a string and
 // never prints it; the buffer is wiped on unlock and on exit.
 //
-// The program prints "locked" and "unlocked" on standard output as progress
-// markers (the headless test waits for them).
+// The program prints "locked", "focused" (the keyboard reached a lock surface)
+// and "unlocked" on standard output as progress markers; the headless test
+// waits for them. It never prints anything typed.
 //
 // All logic runs on the owner goroutine, inside or right after Conn.Dispatch.
 // The lock needs one surface per output; each gets its own Renderer.
@@ -25,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/bnema/neferclient"
@@ -32,6 +34,10 @@ import (
 )
 
 const keysymReturn, keysymKPEnter = 0xff0d, 0xff8d // xkb keysyms
+
+// guiMods is the set of modifiers NeferGUI knows. neferclient and NeferGUI use
+// the same bit order for them, so the plain bits can be copied.
+const guiMods = neferclient.ModShift | neferclient.ModCtrl | neferclient.ModAlt | neferclient.ModSuper
 
 // model is what the view reads. The secret stays in its buffer; the view only
 // asks for its length.
@@ -47,6 +53,7 @@ func view(f *nefergui.Frame, m *model) {
 
 // screen is the lock surface of one output and its renderer.
 type screen struct {
+	output uint32 // wl_output registry name (Output.Global)
 	conn   *neferclient.Conn
 	model  *model
 	surf   *neferclient.Surface
@@ -55,6 +62,7 @@ type screen struct {
 	damage []neferclient.Rect
 
 	configured, canPresent, haveAcquire bool
+	live                                map[uint64]int // buffer → release eventfd still watched
 }
 
 type app struct {
@@ -68,12 +76,13 @@ type app struct {
 	screens map[neferclient.SurfaceID]*screen
 
 	cursor           neferclient.CursorShape
+	hover            neferclient.SurfaceID // surface under the pointer, 0 outside
 	locked, unlocked bool
 	err              error
 }
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "lock:", err)
@@ -89,12 +98,15 @@ func run(ctx context.Context) (err error) {
 	a := &app{conn: conn, screens: map[neferclient.SurfaceID]*screen{}, cursor: neferclient.CursorDefault}
 	a.secret = neferclient.NewSecretBuffer(256)
 	a.model.secret = a.secret
+	// Shutdown order: wipe the secret, close the connection (this drops its
+	// descriptor watches), then free the renderers and their GPU resources,
+	// including the release eventfds. The same order as the layer example.
 	defer func() {
 		a.secret.Wipe()
+		err = errors.Join(err, conn.Close())
 		for _, s := range a.screens {
 			err = errors.Join(err, s.close())
 		}
-		err = errors.Join(err, conn.Close())
 	}()
 
 	// The compositor may announce its first output just after Connect.
@@ -105,7 +117,7 @@ func run(ctx context.Context) (err error) {
 				return fmt.Errorf("dispatch: %w", err)
 			}
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil // interrupt or SIGTERM before the lock: nothing to undo
 		}
 	}
 	if a.lock, err = conn.Lock(); err != nil {
@@ -125,7 +137,10 @@ func run(ctx context.Context) (err error) {
 	for !a.unlocked {
 		select {
 		case <-ctx.Done():
-			return ctx.Err() // the session stays locked: only Unlock ends it
+			// Interrupt or SIGTERM: a clean exit. The session stays locked,
+			// because only Lock.Unlock ends a lock; the compositor decides
+			// what happens to a lock whose client is gone.
+			return nil
 		case <-conn.Wake():
 			if err = conn.Dispatch(a); err != nil {
 				return fmt.Errorf("dispatch: %w", err)
@@ -144,8 +159,9 @@ func run(ctx context.Context) (err error) {
 			if err != nil {
 				return err
 			}
-			if shown {
-				// The cursor the hovered element asked for → Seat.SetCursor.
+			// The cursor the hovered element asked for → Seat.SetCursor, only
+			// from the screen under the pointer.
+			if shown && s.surf.ID() == a.hover {
 				a.cursor = cursorShape(s.out.Cursor)
 				if err = a.seat.SetCursor(a.cursor); err != nil {
 					return fmt.Errorf("cursor: %w", err)
@@ -166,7 +182,7 @@ func (a *app) addScreen(output uint32) error {
 	if err != nil {
 		return fmt.Errorf("lock surface: %w", err)
 	}
-	a.screens[surf.ID()] = &screen{conn: a.conn, model: &a.model, surf: surf}
+	a.screens[surf.ID()] = &screen{output: output, conn: a.conn, model: &a.model, surf: surf, live: map[uint64]int{}}
 	return nil
 }
 
@@ -188,6 +204,23 @@ func (a *app) OutputAdded(out *neferclient.Output) {
 	}
 }
 
+// OutputRemoved: stop watching the screen's release fds, free its renderer and
+// surface, and forget it.
+func (a *app) OutputRemoved(global uint32) {
+	for id, s := range a.screens {
+		if s.output != global {
+			continue
+		}
+		if a.hover == id {
+			a.hover = 0
+		}
+		delete(a.screens, id)
+		if err := s.release(); err != nil {
+			a.fail(fmt.Errorf("output %d removed: %w", global, err))
+		}
+	}
+}
+
 func (a *app) Locked() {
 	a.locked = true
 	fmt.Println("locked")
@@ -198,17 +231,30 @@ func (a *app) LockFinished() {
 }
 
 // FeedbackDone: dmabuf feedback → nefergui.RendererConfig.
+//
+// Only the first complete feedback is used. A later one (the compositor
+// changing its preferred device or formats) is ignored: this demo assumes a
+// single GPU, and rebuilding the renderers is application policy that would
+// obscure the glue. A real application would create a new Renderer here and
+// re-import its buffers.
 func (a *app) FeedbackDone(id neferclient.SurfaceID) {
 	if s := a.screens[id]; s != nil {
-		a.fail(s.setup())
+		if err := s.setup(); err != nil {
+			a.fail(err)
+		}
 	}
 }
 
 func (a *app) Configure(id neferclient.SurfaceID, _, _ int32) {
 	if s := a.screens[id]; s != nil {
-		s.configured, s.canPresent = true, true
+		if !s.configured { // later configures must not lift the frame-callback gate
+			s.canPresent = true
+		}
+		s.configured = true
 		s.resize()
-		a.fail(s.setup())
+		if err := s.setup(); err != nil {
+			a.fail(err)
+		}
 	}
 }
 
@@ -238,15 +284,26 @@ func (a *app) FDReady(id uint64) {
 
 // Pointer: neferclient events → nefergui.Input, field by field.
 func (a *app) Pointer(ev *neferclient.PointerEvent) {
+	// Track the screen under the pointer first: the cursor shape is applied
+	// only from it.
+	switch ev.Kind {
+	case neferclient.PointerEnter:
+		a.hover = ev.Surface
+		// The shape only applies after an enter: send the last one again.
+		if err := a.seat.SetCursor(a.cursor); err != nil {
+			a.fail(fmt.Errorf("cursor: %w", err))
+		}
+	case neferclient.PointerLeave:
+		if a.hover == ev.Surface {
+			a.hover = 0
+		}
+	}
 	s := a.screens[ev.Surface]
 	if s == nil || s.r == nil {
 		return
 	}
 	in := nefergui.Input{X: ev.X, Y: ev.Y, Kind: nefergui.InputPointerMotion}
 	switch ev.Kind {
-	case neferclient.PointerEnter:
-		// The shape only applies after an enter: send the last one again.
-		a.fail(a.seat.SetCursor(a.cursor))
 	case neferclient.PointerLeave:
 		in.Kind = nefergui.InputPointerLeave
 	case neferclient.PointerButton:
@@ -274,12 +331,15 @@ func (a *app) Key(ev *neferclient.KeyEvent) {
 	if s := a.screens[ev.Surface]; s != nil && s.r != nil {
 		s.r.Input(&nefergui.Input{
 			Kind: nefergui.InputKey, Keysym: ev.Keysym, Pressed: ev.Pressed, Repeat: ev.Repeat,
-			Modifiers: nefergui.Modifiers(ev.Modifiers & 0x0f), // shift, ctrl, alt, super
+			Modifiers: nefergui.Modifiers(ev.Modifiers & guiMods),
 		})
 	}
 }
 
 func (a *app) KeyboardFocus(id neferclient.SurfaceID, focused bool) {
+	if focused {
+		fmt.Println("focused")
+	}
 	if s := a.screens[id]; s != nil && s.r != nil {
 		kind := nefergui.InputFocusOut
 		if focused {
@@ -376,8 +436,13 @@ func (s *screen) present() error {
 		if err := s.conn.UnwatchFD(rt.ReleaseFD); err != nil {
 			return fmt.Errorf("unwatch retired buffer %d: %w", rt.Buffer, err)
 		}
+		delete(s.live, rt.Buffer)
 		if err := s.surf.DestroyBuffer(rt.Buffer); err != nil {
 			return fmt.Errorf("destroy retired buffer %d: %w", rt.Buffer, err)
+		}
+		// The release timeline of a buffer is imported under the buffer's id.
+		if err := s.surf.DestroyTimeline(rt.Buffer); err != nil {
+			return fmt.Errorf("destroy retired timeline %d: %w", rt.Buffer, err)
 		}
 	}
 	if out.NewBuffer {
@@ -396,6 +461,7 @@ func (s *screen) present() error {
 		if err := s.conn.WatchFD(out.ReleaseFD, s.watchID(out.Buffer)); err != nil {
 			return fmt.Errorf("watch release fd: %w", err)
 		}
+		s.live[out.Buffer] = out.ReleaseFD
 	}
 	if out.NewTimelines {
 		if !s.haveAcquire { // the acquire timeline is shared by every buffer
@@ -426,6 +492,20 @@ func (s *screen) present() error {
 	}
 	s.canPresent = false // until Handler.Frame
 	return nil
+}
+
+// release stops watching the live release eventfds, then frees the renderer and
+// the surface (an output went away). The release eventfds belong to the
+// renderer, so they are unwatched before it closes.
+func (s *screen) release() error {
+	var errs []error
+	for buffer, fd := range s.live {
+		if err := s.conn.UnwatchFD(fd); err != nil {
+			errs = append(errs, fmt.Errorf("unwatch buffer %d: %w", buffer, err))
+		}
+	}
+	clear(s.live)
+	return errors.Join(append(errs, s.close())...)
 }
 
 // close frees the renderer and the surface. The session lock itself is only
