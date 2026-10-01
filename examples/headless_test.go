@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -20,8 +22,9 @@ import (
 // headless in an isolated runtime directory, and are skipped unless
 // NEFERCLIENT_HEADLESS names its binary. The lock example only ever talks to
 // that nested compositor: the child environment is stripped of the caller's
-// session variables, and the socket is checked to live in the temporary
-// directory. Never point these tests at a real session.
+// session variables, and the socket is checked to be absolute (an absolute
+// WAYLAND_DISPLAY is how the example finds it). Never point these tests at a
+// real session.
 
 var envDrop = []string{"DISPLAY=", "WAYLAND_DISPLAY=", "WAYLAND_SOCKET=", "NOTIFY_SOCKET=", "DBUS_SESSION_BUS_ADDRESS=",
 	"XDG_RUNTIME_DIR=", "XDG_CONFIG_HOME=", "XDG_DATA_HOME=", "XDG_STATE_HOME=", "XDG_SESSION_", "XDG_VTNR=", "XDG_SEAT=",
@@ -46,6 +49,25 @@ func must(t *testing.T, err error, what ...any) {
 	if err != nil {
 		t.Fatalf("%v: %v", fmt.Sprint(what...), err)
 	}
+}
+
+// syncBuffer is a bytes buffer safe for the copying goroutine of exec and the
+// test goroutine.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 type compositor struct {
@@ -94,8 +116,8 @@ func startHeadless(t *testing.T) *compositor {
 		paths, _ := filepath.Glob(filepath.Join(dirs["run"], "wayland-*"))
 		for _, p := range paths {
 			if info, err := os.Stat(p); err == nil && info.Mode()&os.ModeSocket != 0 {
-				if !strings.HasPrefix(p, root) {
-					t.Fatalf("socket %s is outside the test directory", p)
+				if !filepath.IsAbs(p) {
+					t.Fatalf("socket %q is not absolute", p)
 				}
 				return &compositor{socket: p, shots: dirs["shots"], env: env, input: stdin}
 			}
@@ -125,7 +147,8 @@ func build(t *testing.T, pkg string) string {
 // command prepares an example to run against c, and only against c.
 func (c *compositor) command(ctx context.Context, exe string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, exe, args...)
-	cmd.Env = append(c.env, "WAYLAND_DISPLAY="+c.socket)
+	// slices.Concat copies: c.env is never aliased or modified.
+	cmd.Env = slices.Concat(c.env, []string{"WAYLAND_DISPLAY=" + c.socket})
 	return cmd
 }
 
@@ -153,8 +176,8 @@ func hasColor(t *testing.T, path string, x, y int, r, g, b uint8) bool {
 }
 
 func TestHeadlessLayer(t *testing.T) {
-	c := startHeadless(t)
 	exe := build(t, "./layer")
+	c := startHeadless(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	cmd := c.command(ctx, exe, "-frames", "20")
@@ -182,20 +205,31 @@ func TestHeadlessLayer(t *testing.T) {
 }
 
 func TestHeadlessLock(t *testing.T) {
-	c := startHeadless(t)
 	exe := build(t, "./lock")
+	c := startHeadless(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	cmd := c.command(ctx, exe)
 	stdout, err := cmd.StdoutPipe()
 	must(t, err)
-	var stderr strings.Builder
+	var stderr syncBuffer
 	cmd.Stderr = &stderr
 	must(t, cmd.Start())
+	// Wait runs once: here, after the program is done, or from the cleanup if
+	// the test fails first (the context kill ends the process).
+	var waitOnce sync.Once
+	var waitErr error
+	wait := func() error {
+		waitOnce.Do(func() { waitErr = cmd.Wait() })
+		return waitErr
+	}
+	t.Cleanup(func() { cancel(); _ = wait() })
+	var all syncBuffer // everything the program printed on stdout
 	lines := make(chan string, 8)
 	go func() {
 		sc := bufio.NewScanner(stdout)
 		for sc.Scan() {
+			_, _ = all.Write(append(sc.Bytes(), '\n'))
 			lines <- sc.Text()
 		}
 		close(lines)
@@ -212,10 +246,17 @@ func TestHeadlessLock(t *testing.T) {
 		}
 	}
 	expect("locked")
+	expect("focused") // the keyboard reached a lock surface: typing is safe
 	// Only the nested compositor receives this input; it types into the
 	// password field (shown masked) and presses Enter.
 	_, err = io.WriteString(c.input, "type abc\nsleep 200ms\nkey Return\n")
 	must(t, err)
 	expect("unlocked")
-	must(t, cmd.Wait(), stderr.String())
+	for range lines { // drain until the program closes stdout
+	}
+	must(t, wait(), stderr.String())
+	// The typed text must not leak to the program's output.
+	if strings.Contains(all.String(), "abc") || strings.Contains(stderr.String(), "abc") {
+		t.Fatal("the typed text appears in the program output")
+	}
 }
