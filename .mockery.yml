@@ -1,0 +1,8 @@
+all: false
+formatter: goimports
+force-file-write: true
+structname: '{{.Mock}}{{.InterfaceName}}'
+template: testify
+template-schema: '{{.Template}}.schema.json'
+require-template-schema-exists: true
+packages: {}

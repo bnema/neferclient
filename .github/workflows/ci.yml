@@ -1,0 +1,37 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  # Arch matches the development system: Go and library versions are the
+  # ones the module is developed against.
+  check:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --init
+    env:
+      XDG_RUNTIME_DIR: /tmp/xdg-runtime
+    steps:
+      # libxkbcommon is loaded at runtime through purego; tests run without a
+      # compositor or a GPU. gcc is for the race detector.
+      - run: >-
+          pacman -Syu --noconfirm --needed
+          git go make gcc libxkbcommon
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          install -d -m 700 "$XDG_RUNTIME_DIR"
+      - run: |
+          go install github.com/vektra/mockery/v3@v3.8.0
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: make check
+      - run: make race
+      - run: make mocks-check

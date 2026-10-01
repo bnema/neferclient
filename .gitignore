@@ -1,0 +1,5 @@
+/bin/
+/.worktrees/
+go.work
+go.work.sum
+*.out
