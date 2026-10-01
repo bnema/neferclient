@@ -58,6 +58,34 @@ func TestImportErrorPathsCloseDupsOnce(t *testing.T) {
 	require.Equal(t, before, openFDs(t))
 }
 
+// DestroyTimeline sends wp_linux_drm_syncobj_timeline_v1.destroy (opcode 0) for
+// the imported timeline, refuses an unknown id and allows importing it again.
+func TestDestroyTimeline(t *testing.T) {
+	c, srv := connectWire(t, surfaceGlobals, surfaceOutputs)
+	s, err := c.NewToplevel("tl", 64, 48)
+	require.NoError(t, err)
+	memfd, err := unix.MemfdCreate("tl", unix.MFD_CLOEXEC)
+	require.NoError(t, err)
+	defer unix.Close(memfd)
+	require.NoError(t, s.ImportTimeline(7, memfd))
+	require.NoError(t, c.Roundtrip())
+
+	var destroys atomic.Int32
+	srv.mu.Lock()
+	srv.hook = func(_ uint32, op uint16, _ []byte) {
+		if op == 0 {
+			destroys.Add(1)
+		}
+	}
+	srv.mu.Unlock()
+	require.NoError(t, s.DestroyTimeline(7))
+	require.NoError(t, c.Roundtrip())
+	require.Equal(t, int32(1), destroys.Load(), "one destroy request")
+	require.ErrorContains(t, s.DestroyTimeline(7), "unknown timeline 7")
+	require.ErrorContains(t, s.DestroyTimeline(99), "unknown timeline 99")
+	require.NoError(t, s.ImportTimeline(7, memfd), "the id is free again")
+}
+
 // requestLog counts the commits the wire peer sees.
 type requestLog struct{ commits atomic.Int32 }
 
