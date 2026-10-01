@@ -2,6 +2,7 @@ package neferclient
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -34,15 +35,32 @@ const (
 	keymapMax   = 16 << 20
 )
 
-type heldKey struct{ evdev, sym uint32 }
+// heldKey is a pressed key. A key that went into the SecretBuffer keeps no
+// keysym and is flagged hidden, so its release is reported without either.
+type heldKey struct {
+	evdev, sym uint32
+	hidden     bool
+}
 
 type textKind uint8
 
 const (
-	kindNone textKind = iota
-	kindText
+	kindNone    textKind = iota
+	kindText             // printable text went into the SecretBuffer
+	kindPending          // a dead or compose key: part of a text sequence, no text yet
 	kindBackspace
 )
+
+// secretWork is the argument and result area of doSecret, which secret.Do runs
+// without arguments. translate clears it after every use.
+type secretWork struct {
+	evdev, sym uint32
+	mods       Modifiers
+	repeat     bool
+	kind       textKind
+	changed    bool
+	err        error
+}
 
 // keyboard interprets wl_keyboard events with xkbcommon. It runs only on the
 // owner goroutine. It never builds a string from key text: translations go
@@ -65,6 +83,7 @@ type keyboard struct {
 	delay          int32 // milliseconds before the first repeat
 	repeating      uint32
 	composePending bool
+	composeUsed    bool // the last text() call consumed the key into a compose sequence
 
 	tfd  int // repeat timerfd
 	tbuf [8]byte
@@ -72,23 +91,16 @@ type keyboard struct {
 	secret  *SecretBuffer
 	scratch [scratchSize]byte
 
-	// Work area of doSecret, which secret.Do runs without arguments.
 	secretFn func()
-	w        struct {
-		evdev, sym uint32
-		mods       Modifiers
-		repeat     bool
-		kind       textKind
-		changed    bool
-		err        error
-	}
-	changed bool // the last translation edited the SecretBuffer
+	w        secretWork
+	changed  bool  // the last translation edited the SecretBuffer
+	timerErr error // first repeat timer failure, reported by the seat
 }
 
 func newKeyboard(locale string) (*keyboard, error) {
 	c, err := xkb.NewContext()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("xkb context: %w", err)
 	}
 	k := &keyboard{ctx: c, held: make([]heldKey, 0, maxHeldKeys), tfd: -1}
 	k.secretFn = k.doSecret
@@ -98,7 +110,7 @@ func newKeyboard(locale string) (*keyboard, error) {
 	}
 	if k.tfd, err = unix.TimerfdCreate(unix.CLOCK_MONOTONIC, unix.TFD_NONBLOCK|unix.TFD_CLOEXEC); err != nil {
 		_ = c.Close()
-		return nil, err
+		return nil, fmt.Errorf("repeat timer: %w", err)
 	}
 	return k, nil
 }
@@ -147,7 +159,7 @@ func (k *keyboard) replaceFD(fd, size int) error {
 	defer f.Close()
 	km, err := k.ctx.NewKeymapFD(fd, size)
 	if err != nil {
-		return err
+		return fmt.Errorf("neferclient: compile keymap: %w", err)
 	}
 	return k.replace(km)
 }
@@ -156,7 +168,7 @@ func (k *keyboard) replace(km *xkb.Keymap) error {
 	s, err := km.NewState()
 	if err != nil {
 		_ = km.Close()
-		return err
+		return fmt.Errorf("neferclient: xkb state: %w", err)
 	}
 	k.reset()
 	if k.state != nil {
@@ -180,26 +192,36 @@ func (k *keyboard) replace(km *xkb.Keymap) error {
 }
 
 func (k *keyboard) setMask(depressed, latched, locked, group uint32) error {
-	k.lastMask = [6]uint32{depressed, latched, locked, 0, 0, group}
+	mask := [6]uint32{depressed, latched, locked, 0, 0, group}
+	if k.haveMask && mask == k.lastMask {
+		return nil // compositors repeat identical masks; the state is current
+	}
+	k.lastMask = mask
 	k.haveMask = true
 	if k.state == nil {
 		return nil
 	}
-	_, err := k.state.UpdateMask(depressed, latched, locked, 0, 0, group)
-	k.refresh()
-	return err
+	changed, err := k.state.UpdateMask(depressed, latched, locked, 0, 0, group)
+	if err != nil {
+		return fmt.Errorf("neferclient: update xkb mask: %w", err)
+	}
+	if changed != 0 {
+		k.refresh()
+	}
+	return nil
 }
 
 // refresh recomputes the cached modifiers and layout from the xkb state. Both
 // only change when the mask does, so keys do not query them.
 func (k *keyboard) refresh() {
-	k.mods, k.group = k.queryModifiers(), 0
+	k.mods = k.queryModifiers()
 	k.group, _ = k.state.Layout()
 }
 
 // reset drops held keys, repeat and compose state. It keeps the keymap, the
 // modifier mask and the focus flag.
 func (k *keyboard) reset() {
+	clear(k.held[:cap(k.held)]) // no hidden-key record outlives the reset
 	k.held = k.held[:0]
 	k.repeating = 0
 	k.disarm()
@@ -233,14 +255,27 @@ func (k *keyboard) arm() {
 		Interval: unix.NsecToTimespec(int64(time.Second) / int64(k.rate)),
 		Value:    unix.NsecToTimespec(max(int64(k.delay)*int64(time.Millisecond), 1)), // zero would disarm
 	}
-	_ = unix.TimerfdSettime(k.tfd, 0, &spec, nil)
+	k.setTimer(&spec)
 }
 
 func (k *keyboard) disarm() {
 	if k.tfd >= 0 {
 		var spec unix.ItimerSpec
-		_ = unix.TimerfdSettime(k.tfd, 0, &spec, nil)
+		k.setTimer(&spec)
 	}
+}
+
+func (k *keyboard) setTimer(spec *unix.ItimerSpec) {
+	if err := unix.TimerfdSettime(k.tfd, 0, spec, nil); err != nil && k.timerErr == nil {
+		k.timerErr = fmt.Errorf("neferclient: repeat timer: %w", err)
+	}
+}
+
+// takeTimerErr returns and clears the first timer failure.
+func (k *keyboard) takeTimerErr() error {
+	err := k.timerErr
+	k.timerErr = nil
+	return err
 }
 
 // expired consumes a timer expiration. Missed ticks are not accumulated: one
@@ -273,7 +308,12 @@ func (k *keyboard) find(evdev uint32) int {
 	return -1
 }
 
-func (k *keyboard) drop(i int) { k.held = append(k.held[:i], k.held[i+1:]...) }
+func (k *keyboard) drop(i int) {
+	last := len(k.held) - 1
+	copy(k.held[i:], k.held[i+1:])
+	k.held[last] = heldKey{} // clear the vacated slot
+	k.held = k.held[:last]
+}
 
 // press translates a key press into ev. It reports false when the press must
 // not be delivered (no focus or keymap).
@@ -289,13 +329,17 @@ func (k *keyboard) press(evdev uint32, ev *KeyEvent) (bool, error) {
 	}
 	sym, err := k.state.KeySym(xkb.WaylandKeycode(evdev))
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("neferclient: key symbol: %w", err)
 	}
 	kind, err := k.translate(evdev, sym, false, ev)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("neferclient: key text: %w", err)
 	}
-	k.held = append(k.held, heldKey{evdev, sym})
+	if ev.Secret {
+		k.held = append(k.held, heldKey{evdev: evdev, hidden: true})
+	} else {
+		k.held = append(k.held, heldKey{evdev: evdev, sym: sym})
+	}
 	if k.secret == nil && repeatable(sym) || k.secret != nil && (kind == kindBackspace || kind == kindText && repeatable(sym)) {
 		if k.rate > 0 {
 			k.repeating = evdev
@@ -322,7 +366,10 @@ func (k *keyboard) release(evdev uint32, ev *KeyEvent) bool {
 		k.repeating = 0
 		k.disarm()
 	}
-	ev.Keycode, ev.Keysym, ev.Pressed = evdev, h.sym, false
+	ev.Pressed, ev.Secret = false, h.hidden
+	if !h.hidden {
+		ev.Keycode, ev.Keysym = evdev, h.sym
+	}
 	k.changed = false
 	ev.Modifiers, ev.Group = k.mods, k.group
 	return true
@@ -342,7 +389,7 @@ func (k *keyboard) repeat(ev *KeyEvent) (bool, error) {
 	sym, err := k.state.KeySym(xkb.WaylandKeycode(evdev))
 	if err != nil {
 		_, _ = stop()
-		return false, err
+		return false, fmt.Errorf("neferclient: key symbol: %w", err)
 	}
 	if k.secret == nil && !repeatable(sym) {
 		return stop()
@@ -350,7 +397,7 @@ func (k *keyboard) repeat(ev *KeyEvent) (bool, error) {
 	kind, err := k.translate(evdev, sym, true, ev)
 	if err != nil {
 		_, _ = stop()
-		return false, err
+		return false, fmt.Errorf("neferclient: key text: %w", err)
 	}
 	if k.secret != nil && kind != kindBackspace && !(kind == kindText && repeatable(sym)) {
 		return stop()
@@ -365,11 +412,17 @@ func (k *keyboard) translate(evdev, sym uint32, repeat bool, ev *KeyEvent) (text
 	ev.Modifiers, ev.Group = k.mods, k.group
 	k.changed = false
 	if k.secret != nil {
-		w := &k.w
-		w.evdev, w.sym, w.mods, w.repeat = evdev, sym, ev.Modifiers, repeat
+		k.w = secretWork{evdev: evdev, sym: sym, mods: ev.Modifiers, repeat: repeat}
 		secret.Do(k.secretFn)
-		k.changed = w.changed
-		return w.kind, w.err
+		kind, changed, err := k.w.kind, k.w.changed, k.w.err
+		k.w = secretWork{} // the key identity must not stay in the work area
+		k.changed = changed
+		if kind == kindText || kind == kindPending {
+			// Text keys are not identified: the keycode and keysym would
+			// reveal the secret character.
+			ev.Keycode, ev.Keysym, ev.Secret = 0, 0, true
+		}
+		return kind, err
 	}
 	n, err := k.text(evdev, sym, repeat)
 	if err != nil {
@@ -385,7 +438,6 @@ func (k *keyboard) translate(evdev, sym uint32, repeat bool, ev *KeyEvent) (text
 // handles secret text, so it runs under runtime/secret when available.
 func (k *keyboard) doSecret() {
 	w := &k.w
-	w.kind, w.changed, w.err = kindNone, false, nil
 	defer clear(k.scratch[:])
 	switch {
 	case w.sym == raw.XKB_KEY_BackSpace:
@@ -402,9 +454,12 @@ func (k *keyboard) doSecret() {
 			w.err = err
 			return
 		}
-		if classifySecretText(k.scratch[:n]) {
+		switch {
+		case classifySecretText(k.scratch[:n]):
 			w.kind = kindText
 			w.changed = k.secret.appendText(k.scratch[:n])
+		case k.composeUsed || k.composePending || isDeadKey(w.sym):
+			w.kind = kindPending // dead and compose keys name an accent, so hide them too
 		}
 	}
 }
@@ -420,6 +475,7 @@ func (k *keyboard) resetCompose() {
 // is fed only by physical presses: a repeat neither advances a sequence nor
 // replays composed text.
 func (k *keyboard) text(evdev, sym uint32, repeat bool) (int, error) {
+	k.composeUsed = false
 	if k.compose != nil && !repeat {
 		if _, err := k.compose.Feed(sym); err != nil {
 			return 0, err
@@ -428,6 +484,7 @@ func (k *keyboard) text(evdev, sym uint32, repeat bool) (int, error) {
 		if err != nil {
 			return 0, err
 		}
+		k.composeUsed = status == raw.XKB_COMPOSE_COMPOSING || status == raw.XKB_COMPOSE_CANCELLED || status == raw.XKB_COMPOSE_COMPOSED
 		switch status {
 		case raw.XKB_COMPOSE_COMPOSING:
 			k.composePending = true
@@ -461,11 +518,20 @@ func shortAsEmpty(n int, err error) (int, error) {
 // Modifier, dead and compose keys never repeat. The compositor provides rate
 // and delay; its keymap is authoritative for text and layout.
 func repeatable(sym uint32) bool {
+	return !isModifierKey(sym) && !isDeadKey(sym)
+}
+
+func isModifierKey(sym uint32) bool {
 	switch sym {
 	case raw.XKB_KEY_Shift_L, raw.XKB_KEY_Shift_R, raw.XKB_KEY_Control_L, raw.XKB_KEY_Control_R,
 		raw.XKB_KEY_Alt_L, raw.XKB_KEY_Alt_R, raw.XKB_KEY_Super_L, raw.XKB_KEY_Super_R,
-		raw.XKB_KEY_Caps_Lock, raw.XKB_KEY_Num_Lock, raw.XKB_KEY_Multi_key:
-		return false
+		raw.XKB_KEY_Caps_Lock, raw.XKB_KEY_Num_Lock:
+		return true
 	}
-	return sym < raw.XKB_KEY_dead_grave || sym > raw.XKB_KEY_dead_currency
+	return false
+}
+
+// isDeadKey reports dead keys and the compose key, which start a sequence.
+func isDeadKey(sym uint32) bool {
+	return sym == raw.XKB_KEY_Multi_key || sym >= raw.XKB_KEY_dead_grave && sym <= raw.XKB_KEY_dead_currency
 }

@@ -10,8 +10,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// maxSeatVersion is the wl_seat version bound: 9 adds axis_value120 users and
-// the release requests.
+// maxSeatVersion is the highest wl_seat version bound. Version 5 adds the
+// wl_seat.release request and wl_pointer.frame, 8 adds wl_pointer.axis_value120.
 const maxSeatVersion = 9
 
 // CursorShape is a wp_cursor_shape_v1 shape. The values are the protocol's.
@@ -95,12 +95,18 @@ type PointerEvent struct {
 // KeyEvent is one key press, repeat or release.
 type KeyEvent struct {
 	Surface   SurfaceID
-	Keycode   uint32 // evdev key code
-	Keysym    uint32 // xkb keysym in the current layout and modifier state
+	Keycode   uint32 // evdev key code; 0 when Secret is set
+	Keysym    uint32 // xkb keysym in the current layout and modifier state; 0 when Secret is set
 	Modifiers Modifiers
 	Group     uint32 // effective layout index
 	Pressed   bool
 	Repeat    bool
+	// Secret is set while a [SecretBuffer] is installed, for the press,
+	// repeats and release of a key that produced text (or is a dead or compose
+	// key): the text went into the buffer, and Keycode and Keysym are 0 so the
+	// event does not reveal which character was typed. Other keys (Enter,
+	// Escape, BackSpace, modifiers, Control combinations) keep their keysym.
+	Secret bool
 	// Text is the UTF-8 text of the key, nil for releases and keys without
 	// text. It aliases library storage that is wiped when Handler.Key
 	// returns. It is always nil while a [SecretBuffer] is installed.
@@ -109,7 +115,8 @@ type KeyEvent struct {
 
 // Seat is the connection's first wl_seat: pointer, keyboard and cursor. It
 // belongs to the owner goroutine. Without a seat global every method is a
-// no-op.
+// no-op. The seat is bound once, at first use: a seat announced later is not
+// picked up, and a removed one is not replaced (no seat hotplug).
 type Seat struct {
 	c     *Conn
 	proxy *wayland.Seat
@@ -184,8 +191,15 @@ func (c *Conn) ensureSeat() {
 // SetSecret installs b to receive typed text, or removes it with nil. While
 // installed, printable text goes only into b and never into KeyEvent.Text;
 // BackSpace removes one code point; every other key is still delivered as a
-// KeyEvent without text. Installing or removing cancels held keys and repeat.
-// The previous buffer is not wiped: that is the caller's call.
+// KeyEvent without text. Keys that produced text are delivered with
+// KeyEvent.Secret set and Keycode and Keysym 0, for the press, repeats and
+// release; Enter, Escape, BackSpace and Control combinations keep their
+// keysym. Installing or removing cancels held keys and repeat. The previous
+// buffer is not wiped: that is the caller's call.
+//
+// Limits: runtime/secret (GOEXPERIMENT=runtimesecret) erases Go registers,
+// stack and heap temporaries, but not the native memory of libxkbcommon, which
+// processes the key text.
 func (s *Seat) SetSecret(b *SecretBuffer) {
 	if s == nil {
 		return
@@ -203,28 +217,24 @@ func (s *Seat) SetCursor(shape CursorShape) error {
 	if s == nil || s.c.closed {
 		return ErrClosed
 	}
-	limit := CursorZoomOut
-	if s.shapesVer >= 2 {
-		limit = CursorAllResize
-	}
 	if shape < CursorDefault || shape > CursorAllResize {
 		return fmt.Errorf("neferclient: invalid cursor shape %d", shape)
 	}
-	if s.shapes == nil || s.pointer == nil || s.enterSerial == 0 || shape == s.shape {
-		return nil
-	}
-	if shape > limit {
+	if shape >= CursorDndAsk && s.shapes != nil && s.shapesVer < 2 {
 		return &CapabilityError{Name: cursorshape.WpCursorShapeManagerInterface, Cause: fmt.Errorf("shape %d requires version 2", shape)}
+	}
+	if s.shapes == nil || s.pointer == nil || s.ptrSurf == 0 || shape == s.shape {
+		return nil
 	}
 	if s.shapeDev == nil {
 		dev, err := s.shapes.GetPointer(s.pointer)
 		if err != nil {
-			return err
+			return fmt.Errorf("neferclient: cursor shape device: %w", err)
 		}
 		s.shapeDev = dev
 	}
 	if err := s.shapeDev.SetShape(s.enterSerial, uint32(shape)); err != nil {
-		return err
+		return fmt.Errorf("neferclient: set cursor shape: %w", err)
 	}
 	s.shape = shape
 	return nil
@@ -258,6 +268,9 @@ func (c *Conn) seatRepeat(h Handler) {
 			s.deliverKey(ke, h)
 		}
 	}
+	if err := s.kb.takeTimerErr(); err != nil {
+		h.Error(err)
+	}
 	if !c.closed {
 		if err := c.armFD(s.kb.tfd, unix.EPOLL_CTL_MOD); err != nil {
 			h.Error(err)
@@ -268,7 +281,7 @@ func (c *Conn) seatRepeat(h Handler) {
 func (s *Seat) deliverKey(ke *KeyEvent, h Handler) {
 	h.Key(ke)
 	clear(s.kb.scratch[:]) // ordinary text must not outlive the call
-	ke.Text = nil
+	*ke = KeyEvent{}
 	if s.kb.changed {
 		h.SecretChanged(s.secret.Len())
 	}
@@ -363,7 +376,7 @@ func (s *Seat) newPointer() error {
 	defer c.resume()
 	p, err := s.proxy.GetPointer()
 	if err != nil {
-		return err
+		return fmt.Errorf("neferclient: get wl_pointer: %w", err)
 	}
 	s.pointer = p
 	s.ptrGen++
@@ -391,11 +404,11 @@ func (s *Seat) newKeyboard() error {
 	if s.kb == nil {
 		kb, err := newKeyboard(composeLocale())
 		if err != nil {
-			return err
+			return fmt.Errorf("neferclient: keyboard: %w", err)
 		}
 		if err = c.armFD(kb.tfd, unix.EPOLL_CTL_ADD); err != nil {
 			kb.close()
-			return err
+			return err // armFD wraps it
 		}
 		kb.secret = s.secret
 		s.kb = kb
@@ -404,7 +417,7 @@ func (s *Seat) newKeyboard() error {
 	defer c.resume()
 	k, err := s.proxy.GetKeyboard()
 	if err != nil {
-		return err
+		return fmt.Errorf("neferclient: get wl_keyboard: %w", err)
 	}
 	s.keyboard = k
 	s.kbGen++
@@ -455,6 +468,9 @@ func (c *Conn) applySeat(ev *event, h Handler) {
 	default:
 		if s.keyboard != nil && ev.version == s.kbGen {
 			s.applyKeyboard(ev, h)
+			if err := s.kb.takeTimerErr(); err != nil {
+				h.Error(err)
+			}
 		}
 	}
 }
@@ -538,10 +554,14 @@ func (s *Seat) applyKeyboard(ev *event, h Handler) {
 	switch ev.kind {
 	case evKbKeymap:
 		fd := int(ev.fd)
-		ev.fd = -1 // replaceFD consumes fd; the deferred closeFD must not touch the number again
+		ev.fd = -1     // replaceFD consumes fd; the deferred closeFD must not touch the number again
+		if ev.a == 0 { // no_keymap: the compositor sends no usable map; nothing to report
+			_ = unix.Close(fd)
+			return
+		}
 		if ev.a != 1 || ev.flags == 0 || ev.flags > keymapMax {
 			_ = unix.Close(fd)
-			h.Error(errors.New("neferclient: unsupported keymap format or size"))
+			h.Error(fmt.Errorf("neferclient: unsupported keymap format %d or size %d", ev.a, ev.flags))
 			return
 		}
 		if err := kb.replaceFD(fd, int(ev.flags)); err != nil {

@@ -170,7 +170,7 @@ func (q *queue) pop(ev *event) bool {
 		return false
 	}
 	*ev = q.ring[q.head]
-	q.ring[q.head].kind = 0 // ownership of a carried descriptor moved to ev
+	q.ring[q.head] = event{} // ownership of a carried descriptor moved to ev; leave no key data behind
 	q.head = (q.head + 1) % ringSize
 	full := q.n == ringSize
 	q.n--

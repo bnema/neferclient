@@ -59,7 +59,10 @@ type Handler interface {
 	// keyboard focus. Text is the text the key produced (nil for releases and
 	// keys without text) and is valid only during the call. While a
 	// [SecretBuffer] is installed with [Seat.SetSecret], Text is always nil
-	// and the text goes into the buffer; see [Handler.SecretChanged]. ev is
+	// and the text goes into the buffer; see [Handler.SecretChanged]. For
+	// those keys (press, repeat and release) ev.Secret is set and Keycode and
+	// Keysym are 0, so the event does not reveal the typed character; Enter,
+	// Escape, BackSpace and Control combinations keep their keysym. ev is
 	// valid only during the call.
 	Key(ev *KeyEvent)
 	// KeyboardFocus reports that a surface gained or lost keyboard focus.
