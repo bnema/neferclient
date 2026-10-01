@@ -23,6 +23,8 @@
 // Destroying the wl_buffer and timeline objects never withdraws a commit the
 // compositor already holds, and the duplicated descriptors are owned by the
 // requests, so rebuilding cannot touch a destroyed object or close a
-// descriptor twice. Keep the old storage alive until its release points
-// signal; closing the renderer is the application's side of that rule.
+// descriptor twice. The compositor holds its own references to the DMA-BUFs
+// and timelines it received, so closing the old renderer at once is safe; what
+// the explicit-sync rule forbids is writing to or recycling storage before its
+// release point signals.
 package neferclient

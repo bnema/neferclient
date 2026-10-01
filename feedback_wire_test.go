@@ -32,13 +32,14 @@ type feedbackPeer struct {
 	mu        sync.Mutex
 	feedback  uint32          // the surface's feedback object
 	live      map[uint32]bool // buffers and timelines created and not yet destroyed
+	params    map[uint32]bool // zwp_linux_buffer_params_v1 objects
 	created   int
 	destroyed int
 	violation []string // an id created while its previous object is still live
 }
 
 func newFeedbackPeer(t *testing.T, srv *wireServer) *feedbackPeer {
-	p := &feedbackPeer{t: t, srv: srv, live: map[uint32]bool{}}
+	p := &feedbackPeer{t: t, srv: srv, live: map[uint32]bool{}, params: map[uint32]bool{}}
 	srv.mu.Lock()
 	srv.hook = func(obj uint32, op uint16, body []byte) {
 		srv.mu.Lock()
@@ -54,12 +55,16 @@ func newFeedbackPeer(t *testing.T, srv *wireServer) *feedbackPeer {
 			p.created++
 		}
 		switch {
+		case obj == dmabuf && op == 1 && len(body) == 4: // create_params(new_id)
+			p.params[binary.LittleEndian.Uint32(body)] = true
 		case obj == dmabuf && op == 2 && len(body) == 4: // get_default_feedback(new_id)
 			p.feedback = binary.LittleEndian.Uint32(body)
 		case obj == syncobj && op == 2 && len(body) == 4: // import_timeline(new_id, fd)
 			create(binary.LittleEndian.Uint32(body))
-		case op == 3 && len(body) == 20 && obj != dmabuf && !p.live[obj]: // params.create_immed(new_id, w, h, format, flags)
+		case p.params[obj] && op == 3 && len(body) == 20: // params.create_immed(new_id, w, h, format, flags)
 			create(binary.LittleEndian.Uint32(body))
+		case p.params[obj] && op == 0 && len(body) == 0: // params.destroy: the id may be reused
+			delete(p.params, obj)
 		case op == 0 && len(body) == 0 && p.live[obj]: // destructor of a live buffer or timeline
 			delete(p.live, obj)
 			p.destroyed++
@@ -166,6 +171,12 @@ func TestFeedbackChangeAfterStartup(t *testing.T) {
 	require.False(t, s.Feedback().Equal(changed), "format order changed")
 	require.Len(t, changed.Formats, 3, "the clone keeps its own formats")
 	require.Equal(t, table[0], changed.Formats[0])
+	// The library double-buffers its format storage: this round writes the
+	// buffer the earlier round used, which a shallow clone would share.
+	peer.round(table, 0xe281, 2, 2, 2)
+	wait(6)
+	require.Equal(t, table, changed.Formats, "the clone does not alias library storage")
+	require.Equal(t, table[:2], inUse.Formats)
 
 	var none *neferclient.Feedback
 	require.True(t, none.Equal(nil))

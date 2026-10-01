@@ -2,6 +2,7 @@ package neferclient_test
 
 import (
 	"context"
+	"runtime"
 	"testing"
 	"time"
 	"unsafe"
@@ -166,28 +167,44 @@ func newUdmabuf(t *testing.T, w, h int) int {
 	return int(fd)
 }
 
-// newSyncobjFD returns an exported DRM syncobj for use as a timeline; the test
-// is skipped when there is no render node.
-func newSyncobjFD(t *testing.T) int {
+// newSyncobjFD returns an exported DRM syncobj for use as a timeline and a
+// function that signals one of its points; the test is skipped when there is
+// no render node.
+func newSyncobjFD(t *testing.T) (fd int, signal func(point uint64)) {
 	t.Helper()
 	dev, err := unix.Open("/dev/dri/renderD128", unix.O_RDWR|unix.O_CLOEXEC, 0)
 	if err != nil {
 		t.Skipf("no render node: %v", err)
 	}
-	defer unix.Close(dev)
-	create := struct{ handle, flags uint32 }{}
+	t.Cleanup(func() { _ = unix.Close(dev) })
+	create := struct{ handle, flags uint32 }{} // struct drm_syncobj_create
 	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(dev), 0xC00864BF, uintptr(unsafe.Pointer(&create))); errno != 0 {
 		t.Skipf("SYNCOBJ_CREATE: %v", errno)
 	}
-	exp := struct {
+	exp := struct { // struct drm_syncobj_handle, 24 bytes
 		handle, flags uint32
 		fd, pad       int32
+		point         uint64
 	}{handle: create.handle, fd: -1}
-	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(dev), 0xC02064C1, uintptr(unsafe.Pointer(&exp))); errno != 0 {
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(dev), 0xC01864C1, uintptr(unsafe.Pointer(&exp))); errno != 0 {
 		t.Skipf("SYNCOBJ_HANDLE_TO_FD: %v", errno)
 	}
 	t.Cleanup(func() { _ = unix.Close(int(exp.fd)) })
-	return int(exp.fd)
+	signal = func(point uint64) {
+		t.Helper()
+		handles, points := [1]uint32{create.handle}, [1]uint64{point}
+		arg := struct { // struct drm_syncobj_timeline_array, 24 bytes
+			handles, points uint64
+			count, flags    uint32
+		}{uint64(uintptr(unsafe.Pointer(&handles))), uint64(uintptr(unsafe.Pointer(&points))), 1, 0}
+		_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(dev), 0xC01864CD, uintptr(unsafe.Pointer(&arg)))
+		runtime.KeepAlive(&handles)
+		runtime.KeepAlive(&points)
+		if errno != 0 {
+			t.Fatalf("SYNCOBJ_TIMELINE_SIGNAL: %v", errno)
+		}
+	}
+	return int(exp.fd), signal
 }
 
 // TestHeadlessReconfigureWhilePending drops every import of a mapped surface
@@ -213,7 +230,7 @@ func TestHeadlessReconfigureWhilePending(t *testing.T) {
 	require.NoError(t, err)
 
 	dmabuf := newUdmabuf(t, int(pw), int(ph))
-	timeline := newSyncobjFD(t)
+	timeline, signal := newSyncobjFD(t)
 	point := uint64(0)
 	imports := func() {
 		t.Helper()
@@ -223,16 +240,19 @@ func TestHeadlessReconfigureWhilePending(t *testing.T) {
 			require.NoError(t, s.ImportTimeline(id, timeline))
 		}
 	}
+	// The acquire point is signalled first: an explicit-sync compositor applies
+	// the commit, and so sends the frame callback, only once it is.
 	present := func() {
 		t.Helper()
 		point++
+		signal(point)
 		require.NoError(t, s.Present(&neferclient.Present{Buffer: 1, AcquireTimeline: 1, ReleaseTimeline: 2,
 			AcquirePoint: point, ReleasePoint: point + 1000, Opaque: true}))
 	}
 	imports()
 	present()
 	// No Dispatch ran since the commit: its frame is pending for the library.
-	require.Error(t, s.Present(&neferclient.Present{Buffer: 1, AcquireTimeline: 1, ReleaseTimeline: 2}))
+	require.ErrorContains(t, s.Present(&neferclient.Present{Buffer: 1, AcquireTimeline: 1, ReleaseTimeline: 2}), "frame callback pending")
 	require.NoError(t, s.DestroyImports())
 	require.NoError(t, c.Roundtrip()) // a protocol error would fail here
 	dispatchUntil(t, c, hd, func() bool { return frames == 1 })

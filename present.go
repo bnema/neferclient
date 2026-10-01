@@ -150,12 +150,14 @@ func (s *Surface) DestroyTimeline(id uint64) error {
 // usual; the next Present waits for it as always. The compositor keeps the
 // content and the DMA-BUF references of a commit it already received: destroying
 // a wl_buffer or a timeline never withdraws a commit, and the descriptors were
-// duplicated at import, so none is closed twice. The caller still owns the
-// storage behind the buffers and must not reuse or free it before the release
-// points of the commits that used it signal (the explicit-sync rule).
+// duplicated at import, so none is closed twice. The caller may drop its own
+// references to the storage (close the renderer) at once, but must not write
+// to or recycle it before the release points of the commits that used it
+// signal (the explicit-sync rule).
 //
 // Every object is destroyed exactly once, even if a request fails; the errors
-// are joined. See [Feedback.Equal] and the package documentation.
+// are joined. It returns [ErrClosed] after Surface.Close or Conn.Close. See
+// [Feedback.Equal] and the package documentation.
 func (s *Surface) DestroyImports() error {
 	if s.closed || s.c.closed {
 		return ErrClosed

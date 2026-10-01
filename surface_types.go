@@ -18,11 +18,12 @@ type Feedback struct {
 	Formats    []Format // every tranche's formats, flattened in tranche order
 }
 
-// Equal reports whether f and o describe the same preference: the same main
-// device and the same formats in the same order. A nil Feedback equals only
-// nil. The compositor sends a complete round again whenever it re-evaluates its
-// preference, often unchanged, so compare against the feedback a renderer was
-// built from before rebuilding it.
+// Equal reports whether f and o have the same main device and the same formats
+// in the same order. Feedback flattens tranches, so a change limited to a
+// tranche's target device or scanout flag is not visible here. A nil Feedback
+// equals only nil. The compositor sends a complete round again whenever it
+// re-evaluates its preference, often unchanged, so compare against the
+// feedback a renderer was built from before rebuilding it.
 func (f *Feedback) Equal(o *Feedback) bool {
 	if f == nil || o == nil {
 		return f == o
