@@ -4,8 +4,8 @@ go 1.27
 
 require (
 	github.com/bnema/go-wayland-bindings v0.1.0
-	github.com/bnema/purego-xkbcommon v0.1.0
-	github.com/bnema/wlturbo v0.6.0
+	github.com/bnema/purego-xkbcommon v0.2.0
+	github.com/bnema/wlturbo v0.6.1
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/sys v0.48.0
 )

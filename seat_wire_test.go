@@ -362,27 +362,12 @@ func TestSeatRepeatThroughEpoll(t *testing.T) {
 	require.Equal(t, n, repeats, "release stops the repeat")
 }
 
-// xkbAllocsPerPress bounds the allocations of one key press. They all come
-// from purego-xkbcommon: its functions are registered through purego's
-// reflection-based RegisterFunc, which allocates the boxed return value (and
-// more) on every native call, and a press makes four (key_get_one_sym,
-// compose feed, compose status, key_get_utf8). The library itself adds none;
-// the zero-allocation guard below proves that. The bound pins the binding's
-// cost so a regression above it shows.
-const xkbAllocsPerPress = 20
-
-// xkbAllocsPerMask bounds a mask change: update_mask, serialize_mods and
-// serialize_layout, boxed the same way.
-const xkbAllocsPerMask = 12
-
 // TestAllocKey measures the steady-state key path over a real socketpair, on
 // the real code path (no mocks): key frames in, reader decode, queue, Dispatch
 // with xkb state and translation, and the Handler call.
 //
-// Releases make no native call, so a batch of them measures the library's own
-// cost, which must be zero. Presses add the purego-xkbcommon cost (see
-// xkbAllocsPerPress); that is measured for ordinary text and for the secret
-// buffer.
+// Every path is zero-allocation: releases, text and secret presses, and
+// modifier masks (purego-xkbcommon v0.2.0 dispatches without allocating).
 func TestAllocKey(t *testing.T) {
 	skipUnderRace(t)
 	c, srv, peer, s := seatSetup(t)
@@ -431,11 +416,11 @@ func TestAllocKey(t *testing.T) {
 	}
 	step := run(batch, 2*pairs)
 	text := measure("text, 50 presses + releases", step)
-	require.LessOrEqual(t, text, float64(pairs*xkbAllocsPerPress))
+	require.Zero(t, text, "text presses allocate nothing")
 	require.Equal(t, "a", h.lastText)
 
 	// Modifier masks: an identical mask is a no-op and allocates nothing; a
-	// changing one updates the xkb state (purego-xkbcommon calls, bounded).
+	// changing one updates the xkb state, also without allocating.
 	mods := func(depressed uint32) []byte {
 		b := appendU32(appendU32(nil, 1), depressed)
 		return frame(kb, 4, appendU32(appendU32(appendU32(b, 0), 0), 0))
@@ -449,12 +434,12 @@ func TestAllocKey(t *testing.T) {
 	}
 	require.Zero(t, measure("modifiers, 100 identical masks", run(same, 100)), "identical masks cost nothing")
 	changes := measure("modifiers, 100 alternating masks", run(changing, 100))
-	require.LessOrEqual(t, changes, float64(100*xkbAllocsPerMask))
+	require.Zero(t, changes, "mask changes allocate nothing")
 
 	buf := neferclient.NewSecretBuffer(4096)
 	c.Seat().SetSecret(buf)
 	secret := measure("secret, 50 presses + releases", step)
-	require.LessOrEqual(t, secret, float64(pairs*xkbAllocsPerPress))
+	require.Zero(t, secret, "secret presses allocate nothing")
 	require.Empty(t, h.lastText, "no text reaches the handler in secret mode")
 	require.Positive(t, buf.Len())
 	buf.Wipe()
