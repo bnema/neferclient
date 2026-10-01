@@ -4,9 +4,16 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/bnema/go-wayland-bindings/client/wayland"
 	"github.com/bnema/wlturbo/wl"
 	"golang.org/x/sys/unix"
 )
+
+// importedBuffer is a wl_buffer with the size it was imported at.
+type importedBuffer struct {
+	buf  *wayland.Buffer
+	w, h int32
+}
 
 // Plane is one DMA-BUF plane of a [Buffer]. FD stays owned by the caller.
 type Plane struct {
@@ -38,7 +45,7 @@ type Present struct {
 
 // ImportBuffer creates a wl_buffer from b under the caller's id. The plane
 // descriptors are duplicated internally; the caller keeps ownership of its own.
-func (s *Surface) ImportBuffer(id uint64, b *Buffer) error {
+func (s *Surface) ImportBuffer(id uint64, b *Buffer) (err error) {
 	if s.closed {
 		return ErrClosed
 	}
@@ -48,11 +55,11 @@ func (s *Surface) ImportBuffer(id uint64, b *Buffer) error {
 	if b == nil || b.Width <= 0 || b.Height <= 0 || b.PlaneCount < 1 || b.PlaneCount > len(b.Planes) {
 		return errors.New("neferclient: invalid buffer description")
 	}
-	var dups [4]int
+	dups := [4]int{-1, -1, -1, -1}
 	sent := 0
 	defer func() {
 		for _, fd := range dups[sent:b.PlaneCount] { // not consumed by a request
-			if fd > 0 {
+			if fd >= 0 {
 				_ = unix.Close(fd)
 			}
 		}
@@ -68,7 +75,7 @@ func (s *Surface) ImportBuffer(id uint64, b *Buffer) error {
 	if err != nil {
 		return err
 	}
-	defer params.Destroy()
+	defer func() { err = errors.Join(err, params.Destroy()) }()
 	hi, lo := uint32(b.Modifier>>32), uint32(b.Modifier)
 	for i := range b.PlaneCount {
 		// On success the request closes the duplicate; on failure it stays ours.
@@ -81,7 +88,7 @@ func (s *Surface) ImportBuffer(id uint64, b *Buffer) error {
 	if err != nil {
 		return err
 	}
-	s.buffers[id] = buf
+	s.buffers[id] = importedBuffer{buf: buf, w: b.Width, h: b.Height}
 	return nil
 }
 
@@ -93,7 +100,7 @@ func (s *Surface) DestroyBuffer(id uint64) error {
 		return fmt.Errorf("neferclient: unknown buffer %d", id)
 	}
 	delete(s.buffers, id)
-	return buf.Destroy()
+	return buf.buf.Destroy()
 }
 
 // ImportTimeline imports a DRM syncobj timeline. fd is duplicated internally.
@@ -124,6 +131,9 @@ func (s *Surface) Present(p *Present) error {
 	if s.closed {
 		return ErrClosed
 	}
+	if p == nil {
+		return errors.New("neferclient: nil present")
+	}
 	if !s.configured {
 		return errors.New("neferclient: present before configure")
 	}
@@ -133,8 +143,12 @@ func (s *Surface) Present(p *Present) error {
 	if !s.frameReady {
 		return errors.New("neferclient: frame callback pending")
 	}
-	if _, ok := s.buffers[p.Buffer]; !ok {
+	buf, ok := s.buffers[p.Buffer]
+	if !ok {
 		return fmt.Errorf("neferclient: unknown buffer %d", p.Buffer)
+	}
+	if p.AcquireTimeline == p.ReleaseTimeline && p.AcquirePoint >= p.ReleasePoint {
+		return fmt.Errorf("neferclient: acquire point %d must precede release point %d on one timeline", p.AcquirePoint, p.ReleasePoint)
 	}
 	for _, id := range [...]uint64{p.AcquireTimeline, p.ReleaseTimeline} {
 		if _, ok := s.timelines[id]; !ok {
@@ -145,6 +159,11 @@ func (s *Surface) Present(p *Present) error {
 	if err != nil {
 		return err
 	}
+	// Without a viewport (and always on lock surfaces) the compositor
+	// requires the buffer to match the surface exactly.
+	if (s.viewport == nil || s.role == roleLock) && (buf.w != pw || buf.h != ph) {
+		return fmt.Errorf("neferclient: buffer %dx%d does not match surface %dx%d", buf.w, buf.h, pw, ph)
+	}
 	r := s.req
 	if s.viewport != nil {
 		if s.sentDestW != s.width || s.sentDestH != s.height {
@@ -153,7 +172,7 @@ func (s *Surface) Present(p *Present) error {
 			}
 			s.sentDestW, s.sentDestH = s.width, s.height
 		}
-	} else if s.scale > 1 && s.sentBufScale != int32(s.scale) {
+	} else if s.sentBufScale != int32(s.scale) {
 		if err = r.setBufferScale(int32(s.scale)); err != nil {
 			return err
 		}
@@ -199,7 +218,7 @@ func (s *Surface) Present(p *Present) error {
 	if err = r.commit(); err != nil {
 		return err
 	}
-	s.frameReady = false
+	s.frameReady, s.presented = false, true
 	return nil
 }
 
@@ -251,7 +270,9 @@ func (r wireRequests) setRelease(timeline, point uint64) error {
 	return r.s.sync.SetReleasePoint(r.s.timelines[timeline], uint32(point>>32), uint32(point))
 }
 
-func (r wireRequests) attach(buffer uint64) error { return r.s.surf.Attach(r.s.buffers[buffer], 0, 0) }
+func (r wireRequests) attach(buffer uint64) error {
+	return r.s.surf.Attach(r.s.buffers[buffer].buf, 0, 0)
+}
 
 func (r wireRequests) damageBuffer(d Rect) error {
 	return r.s.surf.DamageBuffer(d.X, d.Y, d.Width, d.Height)

@@ -113,9 +113,10 @@ type Surface struct {
 	// destination/opaque state last sent; they are double-buffered surface
 	// state that persists across commits, so unchanged values are not resent.
 	sentDestW, sentDestH int32
-	sentBufScale         int32
+	sentBufScale         int32  // starts at 1, the protocol default
+	presented            bool   // a Present committed: the surface is mapped
+	output               uint32 // lock surfaces: the covered wl_output global
 	opaqueSet            bool
-	opaque               *wayland.Region
 	opaqueW, opaqueH     int32
 
 	cb  *frameCallback
@@ -124,7 +125,7 @@ type Surface struct {
 	inputRects  []Rect
 	inputCustom bool
 
-	buffers   map[uint64]*wayland.Buffer
+	buffers   map[uint64]importedBuffer
 	timelines map[uint64]*linuxdrmsyncobj.WpLinuxDrmSyncobjTimeline
 
 	fb      Feedback
@@ -161,8 +162,8 @@ func (f *frameCallback) Dispatch(ev *wl.Event) {
 // ID returns the surface's identifier used in Handler callbacks.
 func (s *Surface) ID() SurfaceID { return s.id }
 
-// Size returns the current logical size and scale (1 until announced). It is
-// zero until the first configure.
+// Size returns the current logical size and scale (1 until announced). Before
+// the first configure the size is the requested one (zero for lock surfaces).
 func (s *Surface) Size() (w, h int32, scale float64) { return s.width, s.height, s.scale }
 
 // Feedback returns the latest complete dmabuf feedback, or nil before the
@@ -237,8 +238,8 @@ func (c *Conn) newSurface(role surfaceRole, w, h int32) (*Surface, error) {
 	}
 	g := &c.g
 	c.nextSurf++
-	s := &Surface{c: c, id: c.nextSurf, role: role, width: w, height: h, scale: 1,
-		buffers: map[uint64]*wayland.Buffer{}, timelines: map[uint64]*linuxdrmsyncobj.WpLinuxDrmSyncobjTimeline{}}
+	s := &Surface{c: c, id: c.nextSurf, role: role, width: w, height: h, scale: 1, sentBufScale: 1,
+		buffers: map[uint64]importedBuffer{}, timelines: map[uint64]*linuxdrmsyncobj.WpLinuxDrmSyncobjTimeline{}}
 	ok := false
 	defer func() {
 		if !ok {
@@ -345,7 +346,16 @@ var badEventErrors = [...]string{
 	badFeedbackFD: "neferclient: dmabuf format table descriptor unavailable",
 	badMainDevice: "neferclient: invalid dmabuf main_device length",
 	badTranche:    "neferclient: odd dmabuf tranche format list",
-	badConfigure:  "neferclient: layer configure size out of range",
+	badConfigure:  "neferclient: configure size out of range",
+}
+
+// configureEvent builds a layer or lock configure event, or a badConfigure
+// event when the compositor announced an out-of-range size.
+func configureEvent(kind eventKind, sid, serial, w, h uint32) event {
+	if w > maxLayerDimension || h > maxLayerDimension {
+		return event{kind: evBadEvent, id: sid, a: badConfigure}
+	}
+	return event{kind: kind, id: sid, serial: serial, a: int32(w), b: int32(h)}
 }
 
 // NewLayerSurface creates a wlr-layer-shell surface. It becomes presentable
@@ -402,12 +412,7 @@ func (c *Conn) NewLayerSurface(cfg LayerConfig) (*Surface, error) {
 		q.post(&e)
 	})
 	s.layer.OnConfigure(func(serial, w, h uint32) {
-		if w > maxLayerDimension || h > maxLayerDimension {
-			e := event{kind: evBadEvent, id: sid, a: badConfigure}
-			q.post(&e)
-			return
-		}
-		e := event{kind: evLayerConfigure, id: sid, serial: serial, a: int32(w), b: int32(h)}
+		e := configureEvent(evLayerConfigure, sid, serial, w, h)
 		q.post(&e)
 	})
 	// Opposite anchors let the compositor assign that axis (size 0).
@@ -574,7 +579,9 @@ func (c *Conn) applySurface(ev *event, h Handler) {
 			s.setScale(float64(ev.a), h)
 		}
 	case evFeedbackTable:
-		if err := s.readTable(int(ev.fd), ev.flags); err != nil {
+		fd := int(ev.fd)
+		ev.fd = -1 // readTable consumes fd; the deferred closeFD must not touch the number again
+		if err := s.readTable(fd, ev.flags); err != nil {
 			h.Error(err)
 		}
 	case evFeedbackMainDevice:
@@ -645,15 +652,22 @@ func (s *Surface) readTable(fd int, size uint32) error {
 	return nil
 }
 
-// SetInputRegion sets the input region (logical pixels) and commits when it
-// changed. nil restores the whole surface; a non-nil empty slice passes all
-// input through. Before the first configure the next commit applies it.
+// SetInputRegion sets the input region (logical pixels). nil restores the
+// whole surface; a non-nil empty slice passes all input through. The region is
+// double-buffered state: it is committed immediately only once the surface
+// presented a buffer; before that the next Present applies it (committing
+// earlier would map a surface without a buffer, which lock surfaces forbid and
+// layer surfaces answer with an error). Lock surfaces always take all input
+// and refuse it.
 func (s *Surface) SetInputRegion(rects []Rect) error {
 	if s.closed {
 		return ErrClosed
 	}
+	if s.role == roleLock {
+		return errors.New("neferclient: lock surfaces take all input")
+	}
 	changed, err := s.stageInputRects(rects)
-	if err != nil || !changed || !s.configured {
+	if err != nil || !changed || !s.presented {
 		return err
 	}
 	return s.surf.Commit()
@@ -709,6 +723,9 @@ func (s *Surface) Close() error {
 }
 
 func (s *Surface) destroy() error {
+	// TODO(wlturbo): a frame callback pending here is unregistered locally, so
+	// its later done/delete_id reaches an unknown object. Fixing it needs
+	// server-side delete_id handling in wlturbo (see TestCloseWithPendingFrame).
 	s.closed = true
 	delete(s.c.surfaces, s.id)
 	var errs []error
@@ -718,15 +735,12 @@ func (s *Surface) destroy() error {
 		}
 	}
 	for id, b := range s.buffers {
-		add(b.Destroy())
+		add(b.buf.Destroy())
 		delete(s.buffers, id)
 	}
 	for id, t := range s.timelines {
 		add(t.Destroy())
 		delete(s.timelines, id)
-	}
-	if s.opaque != nil {
-		add(s.opaque.Destroy())
 	}
 	if s.feedback != nil {
 		add(s.feedback.Destroy())

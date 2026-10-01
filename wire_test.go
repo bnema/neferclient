@@ -138,7 +138,11 @@ func (s *wireServer) serve() {
 func (s *wireServer) handle(obj uint32, op uint16, body []byte) {
 	s.mu.Lock()
 	reg := s.registry
+	hook := s.hook
 	s.mu.Unlock()
+	if hook != nil && obj != 1 && obj != reg {
+		hook(obj, op, body) // every request on a client-created or bound object
+	}
 	switch {
 	case obj == 1 && op == 1: // get_registry
 		id := binary.LittleEndian.Uint32(body)
@@ -172,13 +176,6 @@ func (s *wireServer) handle(obj uint32, op uint16, body []byte) {
 		}
 	case op == 0 && len(body) == 0: // wl_output.release (destructor, no args)
 		s.write(frame(1, 1, appendU32(nil, obj)))
-	default:
-		s.mu.Lock()
-		hook := s.hook
-		s.mu.Unlock()
-		if hook != nil {
-			hook(obj, op, body)
-		}
 	}
 }
 

@@ -33,3 +33,9 @@ func (s *Surface) ResetFrame() { s.frameReady = true }
 
 // UseWireRequests restores the full request path.
 func (s *Surface) UseWireRequests() { s.req = wireRequests{s: s} }
+
+// MarkPresented stands in for a committed Present.
+func (s *Surface) MarkPresented() { s.presented = true }
+
+// DropFrameCallback marks the pending frame callback as answered.
+func (s *Surface) PendingFrame() bool { return !s.frameReady }

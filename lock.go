@@ -77,6 +77,11 @@ func (l *Lock) NewSurface(output uint32) (*Surface, error) {
 	if e == nil || !e.done {
 		return nil, fmt.Errorf("neferclient: lock output %d unavailable", output)
 	}
+	for _, other := range c.surfaces {
+		if other.lock == l && other.output == output {
+			return nil, fmt.Errorf("neferclient: output %d already has a lock surface", output)
+		}
+	}
 	c.pause()
 	defer c.resume()
 	s, err := c.newSurface(roleLock, 0, 0)
@@ -92,10 +97,10 @@ func (l *Lock) NewSurface(output uint32) (*Surface, error) {
 	if s.lockSurf, err = l.obj.GetLockSurface(s.surf, e.proxy); err != nil {
 		return nil, err
 	}
-	s.lock = l
+	s.lock, s.output = l, output
 	q, sid := c.q, uint32(s.id)
 	s.lockSurf.OnConfigure(func(serial, w, h uint32) {
-		ev := event{kind: evLockConfigure, id: sid, serial: serial, a: int32(w), b: int32(h)}
+		ev := configureEvent(evLockConfigure, sid, serial, w, h)
 		q.post(&ev)
 	})
 	// ext-session-lock forbids the initial empty commit: the configure comes
@@ -125,12 +130,22 @@ func (l *Lock) Unlock() error {
 	return l.c.Roundtrip()
 }
 
-// Close destroys a lock that never reached Locked (refused or abandoned). It
-// is an error after Locked: a locked session is only ended by Unlock, and
-// leaving the connection closed keeps the session locked.
+// Close destroys a lock that never reached Locked (refused or abandoned). A
+// locked session is only ended by Unlock, so Close fails once Locked was
+// applied. Because the compositor may have sent locked before it processes the
+// destroy request (which would then be a protocol error), Close first
+// roundtrips and looks through the queued events: if a locked event for this
+// lock is already queued it is treated as applied (Handler.Locked is still
+// delivered by the next Dispatch) and Close fails with the same error.
 func (l *Lock) Close() error {
 	if l.done {
 		return nil
+	}
+	if !l.locked && !l.finished {
+		if err := l.c.Roundtrip(); err != nil {
+			return err
+		}
+		l.locked = l.locked || l.c.q.hasLocked(l.gen)
 	}
 	if l.locked && !l.finished {
 		return errors.New("neferclient: lock is locked: use Unlock")

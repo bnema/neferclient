@@ -51,7 +51,6 @@ func (c *Conn) require[P wl.Proxy](iface string, supported, minimum uint32, newP
 		return zero, 0, &CapabilityError{Name: iface, Cause: err}
 	}
 	if v < minimum {
-		_ = c.wlctx // the proxy stays bound; it is unusable below minimum
 		var zero P
 		return zero, 0, &CapabilityError{Name: iface, Cause: fmt.Errorf("requires version %d, negotiated %d", minimum, v)}
 	}

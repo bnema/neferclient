@@ -280,6 +280,24 @@ func (q *queue) takeHeld() []event {
 	return held
 }
 
+// hasLocked reports whether an evLocked for lock generation gen is queued or
+// parked.
+func (q *queue) hasLocked(gen uint32) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i := range q.n {
+		if e := &q.ring[(q.head+i)%ringSize]; e.kind == evLocked && e.id == gen {
+			return true
+		}
+	}
+	for i := range q.held {
+		if q.held[i].kind == evLocked && q.held[i].id == gen {
+			return true
+		}
+	}
+	return false
+}
+
 // closeFDs closes the descriptors owned by events nobody will drain. Only
 // valid once both producers have stopped.
 func (q *queue) closeFDs() {
