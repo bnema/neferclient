@@ -192,6 +192,9 @@ func newSyncobjFD(t *testing.T) (fd int, signal func(point uint64)) {
 	t.Cleanup(func() { _ = unix.Close(int(exp.fd)) })
 	signal = func(point uint64) {
 		t.Helper()
+		// The kernel reads these through addresses stored in arg. Nothing
+		// between taking them and the syscall can move the stack, and
+		// KeepAlive holds them until it returns.
 		handles, points := [1]uint32{create.handle}, [1]uint64{point}
 		arg := struct { // struct drm_syncobj_timeline_array, 24 bytes
 			handles, points uint64
@@ -208,9 +211,12 @@ func newSyncobjFD(t *testing.T) (fd int, signal func(point uint64)) {
 }
 
 // TestHeadlessReconfigureWhilePending drops every import of a mapped surface
-// while its frame callback is pending, imports again and presents again: the
-// compositor must raise no protocol error (the connection stays usable) and
-// the frame still arrives.
+// while its frame is pending, imports again and presents again: the compositor
+// must raise no protocol error (the connection stays usable) and the frame
+// still arrives. The first commit's objects are destroyed before its acquire
+// point is signalled: a compositor that waits for acquire points still holds
+// that commit unapplied at that moment. Headless NeferWL applies commits
+// without waiting, so there it only shows the requests are accepted.
 func TestHeadlessReconfigureWhilePending(t *testing.T) {
 	c := connectHeadless(t)
 	const w, h = 200, 50
@@ -230,34 +236,34 @@ func TestHeadlessReconfigureWhilePending(t *testing.T) {
 	require.NoError(t, err)
 
 	dmabuf := newUdmabuf(t, int(pw), int(ph))
-	timeline, signal := newSyncobjFD(t)
-	point := uint64(0)
+	// Separate acquire and release syncobjs keep their points independent.
+	acquire, signal := newSyncobjFD(t)
+	release, _ := newSyncobjFD(t)
 	imports := func() {
 		t.Helper()
-		for id := uint64(1); id <= 2; id++ {
-			require.NoError(t, s.ImportBuffer(id, &neferclient.Buffer{Width: pw, Height: ph, FourCC: 0x34325258, PlaneCount: 1,
-				Planes: [4]neferclient.Plane{{FD: dmabuf, Stride: uint32(pw) * 4}}}))
-			require.NoError(t, s.ImportTimeline(id, timeline))
-		}
+		require.NoError(t, s.ImportBuffer(1, &neferclient.Buffer{Width: pw, Height: ph, FourCC: 0x34325258, PlaneCount: 1,
+			Planes: [4]neferclient.Plane{{FD: dmabuf, Stride: uint32(pw) * 4}}}))
+		require.NoError(t, s.ImportTimeline(1, acquire))
+		require.NoError(t, s.ImportTimeline(2, release))
 	}
-	// The acquire point is signalled first: an explicit-sync compositor applies
-	// the commit, and so sends the frame callback, only once it is.
-	present := func() {
+	present := func(point uint64) {
 		t.Helper()
-		point++
-		signal(point)
 		require.NoError(t, s.Present(&neferclient.Present{Buffer: 1, AcquireTimeline: 1, ReleaseTimeline: 2,
-			AcquirePoint: point, ReleasePoint: point + 1000, Opaque: true}))
+			AcquirePoint: point, ReleasePoint: point, Opaque: true}))
 	}
+
 	imports()
-	present()
+	present(1) // acquire point 1 is not signalled yet
 	// No Dispatch ran since the commit: its frame is pending for the library.
 	require.ErrorContains(t, s.Present(&neferclient.Present{Buffer: 1, AcquireTimeline: 1, ReleaseTimeline: 2}), "frame callback pending")
 	require.NoError(t, s.DestroyImports())
 	require.NoError(t, c.Roundtrip()) // a protocol error would fail here
+	signal(1)                         // lets a waiting compositor apply the commit
 	dispatchUntil(t, c, hd, func() bool { return frames == 1 })
+
 	imports()
-	present()
+	signal(2)
+	present(2)
 	dispatchUntil(t, c, hd, func() bool { return frames == 2 })
 	require.NoError(t, s.DestroyImports())
 	require.NoError(t, s.Close())
