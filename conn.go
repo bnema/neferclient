@@ -29,7 +29,10 @@ var (
 	ErrGlobalNotFound = wlturbo.ErrGlobalNotFound
 )
 
-// Output describes one wl_output after its latest wl_output.done.
+// Output describes one wl_output after its latest wl_output.done. Only
+// wl_output globals of version 2 or later are bound (version 1 has no done
+// event, so its description is never known to be complete); older ones are
+// ignored.
 type Output struct {
 	Global        uint32 // registry name; identifies the output for its lifetime
 	Name          string // wl_output.name, empty before version 4
@@ -96,7 +99,7 @@ func Connect(ctx context.Context, display string) (*Conn, error) {
 	}
 	sock, err := (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, "unix", path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Wayland: %w", err)
+		return nil, fmt.Errorf("neferclient: connect %s: %w", path, err)
 	}
 	return connectConn(ctx, sock)
 }
@@ -124,7 +127,7 @@ func connectConn(ctx context.Context, sock net.Conn) (res *Conn, err error) {
 	display, err := wlturbo.ConnectFromConn(sock)
 	if err != nil {
 		_ = sock.Close()
-		return nil, err
+		return nil, fmt.Errorf("neferclient: %w", err)
 	}
 	c := &Conn{
 		sock:    sock,
@@ -169,13 +172,13 @@ func connectConn(ctx context.Context, sock net.Conn) (res *Conn, err error) {
 	// With no reader running, the owner's own roundtrips park every event in
 	// the queue's held list, in order; applying it here is the startup drain.
 	if err = display.Roundtrip(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("neferclient: registry roundtrip: %w", err)
 	}
 	if err = c.applyHeld(); err != nil {
 		return nil, err
 	}
 	if err = display.Roundtrip(); err != nil { // wl_output properties follow the binds
-		return nil, err
+		return nil, fmt.Errorf("neferclient: output roundtrip: %w", err)
 	}
 	if err = c.applyHeld(); err != nil {
 		return nil, err
@@ -203,7 +206,7 @@ func (h removeHook) HandleRegistryGlobalRemove(e wl.RegistryGlobalRemoveEvent) {
 // setupHandler applies setup events without notifying anyone and keeps the
 // first failure, which makes Connect fail.
 type setupHandler struct {
-	nopHandler
+	NopHandler
 	err *error
 }
 
@@ -238,7 +241,7 @@ func (c *Conn) readLoop() {
 			continue // a pause request interrupted the read
 		}
 		if !c.q.isStopped() {
-			c.q.setFatal(err)
+			c.q.setFatal(fmt.Errorf("neferclient: read: %w", err))
 		}
 		return
 	}
@@ -291,7 +294,7 @@ func (c *Conn) resume() {
 	}
 	c.pauseDepth--
 	if c.pauseDepth == 0 {
-		c.q.setPausing(false)
+		c.q.endPause()
 	}
 }
 
@@ -322,7 +325,7 @@ func (c *Conn) Dispatch(h Handler) error {
 		return errors.New("neferclient: Dispatch called from a Handler")
 	}
 	if h == nil {
-		h = nopHandler{}
+		h = NopHandler{}
 	}
 	c.dispatching = true
 	defer func() { c.dispatching = false }()
@@ -374,6 +377,9 @@ func (c *Conn) apply(ev *event, h Handler) {
 			return // unwatched while the event was queued
 		}
 		h.FDReady(id)
+		if c.closed {
+			return // the handler closed the connection
+		}
 		if _, ok := c.watched[ev.fd]; ok { // the handler may have unwatched it
 			if err := c.armFD(int(ev.fd), unix.EPOLL_CTL_MOD); err != nil {
 				h.Error(err)
@@ -392,7 +398,7 @@ func (c *Conn) entry(global uint32) *outputEntry {
 }
 
 func (c *Conn) bindOutput(global, version uint32) error {
-	if version == 0 || c.entry(global) != nil {
+	if version < 2 || c.entry(global) != nil { // v1 has no wl_output.done
 		return nil
 	}
 	o := &outputEntry{pub: Output{Global: global, Scale: 1}, scale: 1}
@@ -472,14 +478,19 @@ func (c *Conn) Outputs() []Output {
 }
 
 // Roundtrip sends wl_display.sync and dispatches until it returns. The reader
-// is paused meanwhile; the events it handled are queued for [Conn.Dispatch].
+// is paused meanwhile; when Roundtrip returns, every event handled before the
+// sync reply is queued for [Conn.Dispatch] (up to the ring capacity; the rest
+// follows as the reader resumes).
 func (c *Conn) Roundtrip() error {
 	if c.closed {
 		return ErrClosed
 	}
 	c.pause()
 	defer c.resume()
-	return c.display.Roundtrip()
+	if err := c.display.Roundtrip(); err != nil {
+		return fmt.Errorf("neferclient: roundtrip: %w", err)
+	}
+	return nil
 }
 
 // Bind binds the global named iface at min(announced, version) and returns the

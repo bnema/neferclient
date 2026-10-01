@@ -161,6 +161,28 @@ func (q *queue) setPausing(v bool) {
 	q.mu.Unlock()
 }
 
+// endPause ends a pause started by setPausing(true). Events producers parked
+// meanwhile are moved into the ring, in order, as far as it has room, so that
+// everything handled during the pause is visible to the next Dispatch. The
+// remainder stays at the front of held; the reader re-posts it when it resumes.
+func (q *queue) endPause() {
+	q.mu.Lock()
+	m := min(len(q.held), ringSize-q.n)
+	for i := range m {
+		q.ring[(q.head+q.n)%ringSize] = q.held[i]
+		q.n++
+	}
+	if m > 0 {
+		q.held = q.held[:copy(q.held, q.held[m:])]
+	}
+	q.pausing = false
+	q.cond.Broadcast()
+	q.mu.Unlock()
+	if m > 0 {
+		q.signal()
+	}
+}
+
 // awaitParked blocks until the reader is parked or gone.
 func (q *queue) awaitParked() {
 	q.mu.Lock()

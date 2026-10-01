@@ -25,11 +25,12 @@ type Handler interface {
 	Error(err error)
 }
 
-// nopHandler discards every event. Connect uses it to apply the events queued
-// during setup, and Dispatch uses it for a nil Handler.
-type nopHandler struct{}
+// NopHandler implements every Handler method as a no-op. Embed it in a handler
+// and override only the methods you need; methods added to Handler in later
+// versions get their no-op here, so embedding keeps the type compiling.
+type NopHandler struct{}
 
-func (nopHandler) OutputAdded(*Output)  {}
-func (nopHandler) OutputRemoved(uint32) {}
-func (nopHandler) FDReady(uint64)       {}
-func (nopHandler) Error(error)          {}
+func (NopHandler) OutputAdded(*Output)  {}
+func (NopHandler) OutputRemoved(uint32) {}
+func (NopHandler) FDReady(uint64)       {}
+func (NopHandler) Error(error)          {}
