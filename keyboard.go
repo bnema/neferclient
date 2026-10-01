@@ -54,6 +54,8 @@ type keyboard struct {
 	compose *xkb.ComposeState
 
 	modBits  [len(modNames)]uint32 // xkb mask per Modifiers bit; 0 when absent
+	mods     Modifiers             // effective modifiers and layout, refreshed when the mask changes
+	group    uint32
 	lastMask [6]uint32
 	haveMask bool
 
@@ -173,6 +175,7 @@ func (k *keyboard) replace(km *xkb.Keymap) error {
 	if k.haveMask { // the compositor's modifiers survive a keymap change
 		_, _ = s.UpdateMask(k.lastMask[0], k.lastMask[1], k.lastMask[2], k.lastMask[3], k.lastMask[4], k.lastMask[5])
 	}
+	k.refresh()
 	return nil
 }
 
@@ -183,7 +186,15 @@ func (k *keyboard) setMask(depressed, latched, locked, group uint32) error {
 		return nil
 	}
 	_, err := k.state.UpdateMask(depressed, latched, locked, 0, 0, group)
+	k.refresh()
 	return err
+}
+
+// refresh recomputes the cached modifiers and layout from the xkb state. Both
+// only change when the mask does, so keys do not query them.
+func (k *keyboard) refresh() {
+	k.mods, k.group = k.queryModifiers(), 0
+	k.group, _ = k.state.Layout()
 }
 
 // reset drops held keys, repeat and compose state. It keeps the keymap, the
@@ -239,7 +250,7 @@ func (k *keyboard) expired() bool {
 	return err == nil && n == 8
 }
 
-func (k *keyboard) modifiers() Modifiers {
+func (k *keyboard) queryModifiers() Modifiers {
 	mods, err := k.state.Mods()
 	if err != nil {
 		return 0
@@ -312,10 +323,8 @@ func (k *keyboard) release(evdev uint32, ev *KeyEvent) bool {
 		k.disarm()
 	}
 	ev.Keycode, ev.Keysym, ev.Pressed = evdev, h.sym, false
-	if k.state != nil {
-		ev.Modifiers = k.modifiers()
-		ev.Group, _ = k.state.Layout()
-	}
+	k.changed = false
+	ev.Modifiers, ev.Group = k.mods, k.group
 	return true
 }
 
@@ -353,8 +362,7 @@ func (k *keyboard) repeat(ev *KeyEvent) (bool, error) {
 // the SecretBuffer, if one is set. In secret mode ev.Text stays nil.
 func (k *keyboard) translate(evdev, sym uint32, repeat bool, ev *KeyEvent) (textKind, error) {
 	ev.Keycode, ev.Keysym, ev.Pressed, ev.Repeat = evdev, sym, true, repeat
-	ev.Modifiers = k.modifiers()
-	ev.Group, _ = k.state.Layout()
+	ev.Modifiers, ev.Group = k.mods, k.group
 	k.changed = false
 	if k.secret != nil {
 		w := &k.w

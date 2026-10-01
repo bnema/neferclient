@@ -94,7 +94,7 @@ func TestKeyboardKeymapFD(t *testing.T) {
 	_, err = f.Write(append(data, 0))
 	require.NoError(t, err)
 
-	k := testKeyboard(t, "", "us")
+	k := testKeyboard(t, "C", "us")
 	fd, err := unix.Dup(int(f.Fd()))
 	require.NoError(t, err)
 	require.NoError(t, k.replaceFD(fd, len(data)+1))
@@ -140,7 +140,7 @@ func pressKey2(k *keyboard, code uint32) (KeyEvent, bool) {
 }
 
 func TestKeyboardRepeatTimer(t *testing.T) {
-	k := testKeyboard(t, "", "us")
+	k := testKeyboard(t, "C", "us")
 	k.setRepeat(20, 50)
 	_, ok := pressKey(t, k, keyQ)
 	require.True(t, ok)
@@ -167,7 +167,7 @@ func TestKeyboardRepeatTimer(t *testing.T) {
 }
 
 func TestKeyboardRepeatTracksCurrentMask(t *testing.T) {
-	k := testKeyboard(t, "", "us")
+	k := testKeyboard(t, "C", "us")
 	k.setRepeat(100, 1)
 	pressKey(t, k, keyQ)
 	idx, err := k.keymap.ModIndex("Shift")
@@ -237,7 +237,7 @@ func TestSecretKeysNeverReachText(t *testing.T) {
 }
 
 func TestSecretChangedFlag(t *testing.T) {
-	k := testKeyboard(t, "", "us")
+	k := testKeyboard(t, "C", "us")
 	buf := NewSecretBuffer(2)
 	k.setSecret(buf)
 	pressKey(t, k, keyQ)
@@ -251,7 +251,7 @@ func TestSecretChangedFlag(t *testing.T) {
 }
 
 func TestSecretRepeat(t *testing.T) {
-	k := testKeyboard(t, "", "us")
+	k := testKeyboard(t, "C", "us")
 	buf := NewSecretBuffer(16)
 	k.setSecret(buf)
 	k.setRepeat(100, 1)

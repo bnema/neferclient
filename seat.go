@@ -137,7 +137,7 @@ type Seat struct {
 	shape       CursorShape
 }
 
-// Seat returns the connection's seat, binding wl_seat on first use. The seat
+// Seat returns the connection's seat (nil after Close), binding wl_seat on first use. The seat
 // is also bound when the first surface is created. Input starts flowing to the
 // Handler once the compositor announces the capabilities.
 func (c *Conn) Seat() *Seat {
@@ -187,6 +187,9 @@ func (c *Conn) ensureSeat() {
 // KeyEvent without text. Installing or removing cancels held keys and repeat.
 // The previous buffer is not wiped: that is the caller's call.
 func (s *Seat) SetSecret(b *SecretBuffer) {
+	if s == nil {
+		return
+	}
 	s.secret = b
 	if s.kb != nil {
 		s.kb.setSecret(b)
@@ -197,7 +200,7 @@ func (s *Seat) SetSecret(b *SecretBuffer) {
 // when the compositor has no cursor-shape support, the pointer is outside the
 // connection's surfaces, or shape is unchanged since the last enter.
 func (s *Seat) SetCursor(shape CursorShape) error {
-	if s.c.closed {
+	if s == nil || s.c.closed {
 		return ErrClosed
 	}
 	limit := CursorZoomOut
