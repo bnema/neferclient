@@ -50,6 +50,24 @@ type Handler interface {
 	// LockFinished reports ext_session_lock_v1.finished: the compositor
 	// refused or ended the lock. Destroy it with [Lock.Close].
 	LockFinished()
+
+	// Pointer reports pointer input over one of the connection's surfaces:
+	// enter, leave, motion, buttons and scrolling. ev is valid only during the
+	// call.
+	Pointer(ev *PointerEvent)
+	// Key reports a key press, repeat or release for the surface that has
+	// keyboard focus. Text is the text the key produced (nil for releases and
+	// keys without text) and is valid only during the call. While a
+	// [SecretBuffer] is installed with [Seat.SetSecret], Text is always nil
+	// and the text goes into the buffer; see [Handler.SecretChanged]. ev is
+	// valid only during the call.
+	Key(ev *KeyEvent)
+	// KeyboardFocus reports that a surface gained or lost keyboard focus.
+	KeyboardFocus(id SurfaceID, focused bool)
+	// SecretChanged reports that a key press, repeat or backspace changed the
+	// installed [SecretBuffer]; count is its length in code points. It is
+	// called after the [Handler.Key] call of that key.
+	SecretChanged(count int)
 }
 
 // NopHandler implements every Handler method as a no-op. Embed it in a handler
@@ -69,3 +87,8 @@ func (NopHandler) Closed(SurfaceID)                  {}
 func (NopHandler) FeedbackDone(SurfaceID)            {}
 func (NopHandler) Locked()                           {}
 func (NopHandler) LockFinished()                     {}
+
+func (NopHandler) Pointer(*PointerEvent)         {}
+func (NopHandler) Key(*KeyEvent)                 {}
+func (NopHandler) KeyboardFocus(SurfaceID, bool) {}
+func (NopHandler) SecretChanged(int)             {}

@@ -236,6 +236,7 @@ func (c *Conn) newSurface(role surfaceRole, w, h int32) (*Surface, error) {
 	if err := c.ensureCore(); err != nil {
 		return nil, err
 	}
+	c.ensureSeat() // optional: input flows to the Handler once the seat is bound
 	g := &c.g
 	c.nextSurf++
 	s := &Surface{c: c, id: c.nextSurf, role: role, width: w, height: h, scale: 1, sentBufScale: 1,
@@ -728,6 +729,7 @@ func (s *Surface) destroy() error {
 	// server-side delete_id handling in wlturbo (see TestCloseWithPendingFrame).
 	s.closed = true
 	delete(s.c.surfaces, s.id)
+	s.c.seatSurfaceGone(s)
 	var errs []error
 	add := func(err error) {
 		if err != nil {
