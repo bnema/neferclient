@@ -724,9 +724,6 @@ func (s *Surface) Close() error {
 }
 
 func (s *Surface) destroy() error {
-	// TODO(wlturbo): a frame callback pending here is unregistered locally, so
-	// its later done/delete_id reaches an unknown object. Fixing it needs
-	// server-side delete_id handling in wlturbo (see TestCloseWithPendingFrame).
 	s.closed = true
 	delete(s.c.surfaces, s.id)
 	s.c.seatSurfaceGone(s)
@@ -772,7 +769,10 @@ func (s *Surface) destroy() error {
 		add(s.surf.Destroy())
 	}
 	if s.cb != nil {
-		s.c.wlctx.Unregister(s.cb)
+		// A pending frame callback is owned by the compositor: abandon it so
+		// its late done and delete_id are discarded. An error only means no
+		// callback was pending.
+		_ = s.c.wlctx.Abandon(s.cb)
 	}
 	return errors.Join(errs...)
 }
