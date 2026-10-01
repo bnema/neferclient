@@ -164,11 +164,9 @@ func TestLockCloseDestroysUnlockedLock(t *testing.T) {
 	require.NoError(t, l.Close(), "idempotent")
 }
 
-// GO-002 reproduction, enabled once wlturbo handles delete_id for objects the
-// server creates: closing a surface with a pending frame callback must not turn
-// the compositor's later callback done and delete_id into a transport error.
+// Closing a surface with a pending frame callback must not turn the
+// compositor's later callback done and delete_id into a transport error.
 func TestCloseWithPendingFrame(t *testing.T) {
-	t.Skip("needs wlturbo server-side delete_id handling")
 	c, srv := connectWire(t, surfaceGlobals, surfaceOutputs)
 	s, err := c.NewToplevel("close", 64, 48)
 	require.NoError(t, err)
