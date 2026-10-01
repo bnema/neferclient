@@ -7,9 +7,13 @@
 // calls Conn.Dispatch, and all Handler methods, renderer calls and Present
 // calls happen inside that call or right after it.
 //
+// Only the button takes pointer input: the view stages its rectangle with
+// Frame.SetInputRects and the program forwards it to Surface.SetInputRegion,
+// so the rest of the surface is click-through.
+//
 // With -frames N the program redraws continuously and exits after N frames
 // (used by the headless test); without it, it runs until the surface is closed
-// or it is interrupted.
+// or it is interrupted. -log-pointer prints pointer enter and leave events.
 package main
 
 import (
@@ -26,10 +30,14 @@ import (
 	"github.com/bnema/nefergui"
 )
 
-// Layout of the surface, in logical pixels. The headless test samples a pixel
-// inside the button at the same place.
+// Layout of the surface, in logical pixels: padding, a label row, a gap, then
+// the button. The headless test samples a pixel inside the button and moves the
+// pointer over the label and the button at the same places.
 const (
 	surfaceW, surfaceH = 240, 90
+	pad, labelH, gap   = 10, 20, 10
+	buttonW, buttonH   = 200, 40
+	buttonY            = pad + labelH + gap
 	buttonColor        = "#2060c0"
 
 	// guiMods is the set of modifiers NeferGUI knows. neferclient and NeferGUI
@@ -38,6 +46,11 @@ const (
 )
 
 type model struct{ count int }
+
+// inputRects is the clickable part of the surface: the button. NeferGUI does
+// not report where a control was laid out, so the rectangle repeats the
+// layout constants. The slice is never modified: SetInputRects copies it.
+var inputRects = []nefergui.Rect{{X: pad, Y: buttonY, Width: buttonW, Height: buttonH}}
 
 // view builds one frame from the model. Button.Activated is true during the
 // frame built after a click.
@@ -48,6 +61,8 @@ func view(f *nefergui.Frame, m *model) {
 		nefergui.Inline("width:200px;height:40px;background:"+buttonColor)).Activated() {
 		m.count++
 	}
+	// The rectangle is valid, so the error cannot happen.
+	_ = f.SetInputRects(inputRects)
 }
 
 type app struct {
@@ -62,6 +77,9 @@ type app struct {
 	out    nefergui.Output
 	model  model
 	damage []neferclient.Rect
+	region []neferclient.Rect // input region sent to the compositor, reused
+
+	logPointer bool
 
 	configured  bool
 	canPresent  bool // configured, and the last frame callback fired
@@ -75,21 +93,25 @@ type app struct {
 
 func main() {
 	frames := flag.Int("frames", 0, "redraw continuously and exit after this many frames (0: run until closed)")
+	logPointer := flag.Bool("log-pointer", false, "print pointer enter and leave events on stdout")
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, *frames); err != nil {
+	if err := run(ctx, *frames, *logPointer); err != nil {
 		fmt.Fprintln(os.Stderr, "layer:", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, frames int) (err error) {
+func run(ctx context.Context, frames int, logPointer bool) (err error) {
 	conn, err := neferclient.Connect(ctx, "") // WAYLAND_DISPLAY
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
-	a := &app{conn: conn, frames: frames, cursor: neferclient.CursorDefault}
+	// region starts non-nil so that an empty NeferGUI region stays an empty
+	// slice (click-through) and does not become nil (whole surface).
+	a := &app{conn: conn, frames: frames, logPointer: logPointer, cursor: neferclient.CursorDefault,
+		region: []neferclient.Rect{}}
 	// Shutdown order: close the connection first, which drops its descriptor
 	// watches and destroys every Wayland object, then free the renderer and
 	// its GPU resources (including the release eventfds).
@@ -225,6 +247,9 @@ func (a *app) Pointer(ev *neferclient.PointerEvent) {
 	switch ev.Kind {
 	case neferclient.PointerEnter:
 		in.Kind = nefergui.InputPointerMotion
+		if a.logPointer {
+			fmt.Printf("pointer enter %.0f %.0f\n", ev.X, ev.Y)
+		}
 		// The cursor shape is only valid after the enter: set the shape of
 		// the last frame again.
 		if err := a.seat.SetCursor(a.cursor); err != nil {
@@ -234,6 +259,9 @@ func (a *app) Pointer(ev *neferclient.PointerEvent) {
 		in.Kind = nefergui.InputPointerMotion
 	case neferclient.PointerLeave:
 		in.Kind = nefergui.InputPointerLeave
+		if a.logPointer {
+			fmt.Println("pointer leave")
+		}
 	case neferclient.PointerButton:
 		in.Kind, in.Button = nefergui.InputPointerRelease, ev.Button
 		if ev.Pressed {
@@ -284,10 +312,37 @@ func (a *app) draw() error {
 	if !ok {
 		return nil
 	}
+	if err = a.setInputRegion(); err != nil {
+		return err
+	}
 	if err = a.present(); err != nil {
 		return err
 	}
 	return a.setCursor()
+}
+
+// setInputRegion: Output.InputRects → Surface.SetInputRegion, only when the
+// view changed it. Both use logical pixels in surface coordinates, so the
+// rectangles are copied field by field without scaling (Output.Width and
+// Height, the buffer size, are the physical ones). Nil means the whole surface
+// and an empty slice means click-through, in both libraries. The region takes
+// effect with the next Present, which follows.
+func (a *app) setInputRegion() error {
+	out := &a.out
+	if !out.InputRectsChanged {
+		return nil
+	}
+	if out.InputRects == nil {
+		return a.surf.SetInputRegion(nil)
+	}
+	a.region = a.region[:0] // reused: no allocation once it has grown
+	for _, r := range out.InputRects {
+		a.region = append(a.region, neferclient.Rect{X: r.X, Y: r.Y, Width: r.Width, Height: r.Height})
+	}
+	if err := a.surf.SetInputRegion(a.region); err != nil {
+		return fmt.Errorf("input region: %w", err)
+	}
+	return nil
 }
 
 // present: Renderer.Render output → ImportBuffer, ImportTimeline, Present.

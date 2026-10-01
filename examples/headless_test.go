@@ -204,6 +204,65 @@ func TestHeadlessLayer(t *testing.T) {
 	}
 }
 
+// TestHeadlessLayerInputRegion checks that the layer example forwards the
+// view's input rectangle to the compositor: NeferWL only delivers pointer
+// events to the surface inside the button, not over the label above it.
+func TestHeadlessLayerInputRegion(t *testing.T) {
+	exe := build(t, "./layer")
+	c := startHeadless(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	cmd := c.command(ctx, exe, "-log-pointer") // runs until killed
+	stdout, err := cmd.StdoutPipe()
+	must(t, err)
+	var stderr syncBuffer
+	cmd.Stderr = &stderr
+	must(t, cmd.Start())
+	t.Cleanup(func() { cancel(); _ = cmd.Wait() })
+	lines := make(chan string, 8)
+	go func() {
+		sc := bufio.NewScanner(stdout)
+		for sc.Scan() {
+			lines <- sc.Text()
+		}
+		close(lines)
+	}()
+	expect := func(want string) {
+		t.Helper()
+		select {
+		case l := <-lines:
+			if l != want {
+				t.Fatalf("got %q, want %q: %s", l, want, stderr.String())
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("timeout waiting for %q: %s", want, stderr.String())
+		}
+	}
+
+	// The region is committed with the first buffer, so once the button is
+	// visible in a screenshot the compositor knows it. The surface is at the
+	// output's top-left corner (see TestHeadlessLayer).
+	deadline := time.Now().Add(10 * time.Second)
+	for visible := false; !visible; time.Sleep(50 * time.Millisecond) {
+		shots, _ := filepath.Glob(filepath.Join(c.shots, "*.png"))
+		for _, p := range shots {
+			visible = visible || hasColor(t, p, 200, 75, 0x20, 0x60, 0xc0)
+		}
+		if !visible && time.Now().After(deadline) {
+			t.Fatalf("the button never appeared: %s", stderr.String())
+		}
+	}
+
+	// (50, 20) is over the label, outside the input region: the surface sees
+	// nothing. (100, 60) is over the button: the first event the program
+	// prints is its enter, so the label position did not enter earlier.
+	// Back on the label, the pointer leaves the surface again.
+	_, err = io.WriteString(c.input, "move 50 20\nsleep 300ms\nmove 100 60\nsleep 300ms\nmove 50 20\n")
+	must(t, err)
+	expect("pointer enter 100 60")
+	expect("pointer leave")
+}
+
 func TestHeadlessLock(t *testing.T) {
 	exe := build(t, "./lock")
 	c := startHeadless(t)
