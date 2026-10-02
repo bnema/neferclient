@@ -162,6 +162,12 @@ func (f *frameCallback) Dispatch(ev *wl.Event) {
 // ID returns the surface's identifier used in Handler callbacks.
 func (s *Surface) ID() SurfaceID { return s.id }
 
+// WLSurface returns the wl_surface proxy, for requests of protocol extensions
+// bound with [Conn.Bind] that take a surface argument. It is valid until
+// [Surface.Close]. The Surface owns it: do not destroy it, attach buffers or
+// commit it. Owner goroutine only.
+func (s *Surface) WLSurface() *wayland.Surface { return s.surf }
+
 // Size returns the current logical size and scale (1 until announced). Before
 // the first configure the size is the requested one (zero for lock surfaces).
 func (s *Surface) Size() (w, h int32, scale float64) { return s.width, s.height, s.scale }

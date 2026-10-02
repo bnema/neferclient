@@ -126,6 +126,18 @@ func TestSetInputRegionCommitsOnlyOnceMapped(t *testing.T) {
 	require.Error(t, ls.SetInputRegion(nil), "lock surfaces take all input")
 }
 
+// WLSurface is the surface's own wl_surface, on the connection's context, so
+// an extension bound with Conn.Bind can pass it as a request argument.
+func TestWLSurfaceIsTheSurfaceProxy(t *testing.T) {
+	c, _ := connectWire(t, surfaceGlobals, surfaceOutputs)
+	s, err := c.NewToplevel("wl", 64, 48)
+	require.NoError(t, err)
+	p := s.WLSurface()
+	require.NotNil(t, p)
+	require.Equal(t, s.SurfaceObjectID(), p.ID())
+	require.Same(t, c.Context(), p.Context())
+}
+
 // GO-007: one lock surface per output.
 func TestLockRefusesSecondSurfacePerOutput(t *testing.T) {
 	c, _ := connectWire(t, surfaceGlobals, surfaceOutputs)
