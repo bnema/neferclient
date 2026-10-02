@@ -18,11 +18,12 @@ jobs:
       XDG_RUNTIME_DIR: /tmp/xdg-runtime
       LANG: en_US.UTF-8
     steps:
+      # nodejs runs JavaScript actions (checkout) on runners that do not inject their own.
       # libxkbcommon is loaded at runtime through purego; tests run without a
       # compositor or a GPU. gcc is for the race detector. Keyboard tests need
       # the en_US.UTF-8 locale and its Compose file (libx11).
       - run: |
-          pacman -Syu --noconfirm --needed git go make gcc glibc-locales libxkbcommon libx11 xkeyboard-config
+          pacman -Syu --noconfirm --needed git go nodejs make gcc glibc-locales libxkbcommon libx11 xkeyboard-config
           echo 'en_US.UTF-8 UTF-8' > /etc/locale.gen
           locale-gen
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
