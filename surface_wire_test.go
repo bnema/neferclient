@@ -136,6 +136,9 @@ func TestWLSurfaceIsTheSurfaceProxy(t *testing.T) {
 	require.NotNil(t, p)
 	require.Equal(t, s.SurfaceObjectID(), p.ID())
 	require.Same(t, c.Context(), p.Context())
+
+	s.Close()
+	require.Nil(t, s.WLSurface(), "a destroyed proxy's id can be reused")
 }
 
 // GO-007: one lock surface per output.
