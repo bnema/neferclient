@@ -228,7 +228,7 @@ func TestHeadlessReconfigureWhilePending(t *testing.T) {
 	var frames int
 	hd := neferclientmocks.NewMockHandler(t)
 	hd.EXPECT().Configure(s.ID(), mock.Anything, mock.Anything).Run(func(neferclient.SurfaceID, int32, int32) { configured = true }).Return().Maybe()
-	hd.EXPECT().FeedbackDone(mock.Anything).Run(func(id neferclient.SurfaceID) { feedback = feedback || id == s.ID() }).Return().Maybe()
+	hd.EXPECT().FeedbackDone(s.ID()).Run(func(neferclient.SurfaceID) { feedback = true }).Return().Maybe()
 	hd.EXPECT().Scale(s.ID(), mock.Anything).Return().Maybe()
 	hd.EXPECT().Frame(s.ID()).Run(func(neferclient.SurfaceID) { frames++ }).Return().Maybe()
 	dispatchUntil(t, c, hd, func() bool { return configured && feedback })
