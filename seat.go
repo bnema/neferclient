@@ -90,6 +90,7 @@ type PointerEvent struct {
 	Pressed  bool    // PointerButton
 	Axis     uint32  // PointerAxis, PointerAxisStop: AxisVertical or AxisHorizontal
 	Value120 int32   // PointerAxis: wheel value in 1/120 notches
+	Serial   uint32  // PointerEnter, PointerButton: the event serial (popup grabs, activation)
 }
 
 // KeyEvent is one key press, repeat or release.
@@ -510,7 +511,7 @@ func (s *Seat) applyPointer(ev *event, h Handler) {
 		s.ptrSurf = sf.id
 		s.px, s.py = fixed(ev.a), fixed(ev.b)
 		s.enterSerial, s.shape = ev.serial, 0 // the compositor forgets the cursor on leave
-		pe.Kind = PointerEnter
+		pe.Kind, pe.Serial = PointerEnter, ev.serial
 	case evPtrLeave:
 		if sf := s.c.surfaceByObject(ev.global); s.ptrSurf == 0 || sf == nil || sf.id != s.ptrSurf {
 			return
@@ -531,7 +532,7 @@ func (s *Seat) applyPointer(ev *event, h Handler) {
 			s.px, s.py = fixed(ev.a), fixed(ev.b)
 			pe.Kind = PointerMotion
 		case evPtrButton:
-			pe.Kind, pe.Button, pe.Pressed = PointerButton, ev.flags, ev.a == 1
+			pe.Kind, pe.Button, pe.Pressed, pe.Serial = PointerButton, ev.flags, ev.a == 1, ev.serial
 		case evPtrAxis:
 			pe.Kind, pe.Axis = PointerAxis, ev.flags
 			if ev.flags == AxisVertical {

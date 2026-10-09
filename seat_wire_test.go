@@ -157,9 +157,9 @@ func TestSeatPointerEvents(t *testing.T) {
 
 	require.Len(t, got, 7)
 	id := s.ID()
-	require.Equal(t, neferclient.PointerEvent{Surface: id, Kind: neferclient.PointerEnter, X: 10.5, Y: 20.25}, got[0])
+	require.Equal(t, neferclient.PointerEvent{Surface: id, Kind: neferclient.PointerEnter, X: 10.5, Y: 20.25, Serial: 77}, got[0])
 	require.Equal(t, neferclient.PointerEvent{Surface: id, Kind: neferclient.PointerMotion, X: 11, Y: 21}, got[1])
-	require.Equal(t, neferclient.PointerEvent{Surface: id, Kind: neferclient.PointerButton, X: 11, Y: 21, Button: 0x110, Pressed: true}, got[2])
+	require.Equal(t, neferclient.PointerEvent{Surface: id, Kind: neferclient.PointerButton, X: 11, Y: 21, Button: 0x110, Pressed: true, Serial: 78}, got[2])
 	require.Equal(t, neferclient.PointerEvent{Surface: id, Kind: neferclient.PointerAxis, X: 11, Y: 21, Axis: 0, DY: 15}, got[3])
 	require.Equal(t, neferclient.PointerEvent{Surface: id, Kind: neferclient.PointerAxis, X: 11, Y: 21, Axis: 1, Value120: -120}, got[4])
 	require.Equal(t, neferclient.PointerEvent{Surface: id, Kind: neferclient.PointerAxisStop, X: 11, Y: 21}, got[5])
