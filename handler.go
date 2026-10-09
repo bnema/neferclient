@@ -40,6 +40,10 @@ type Handler interface {
 	// layer surface closed). Call [Surface.Close]; nothing else happens
 	// automatically.
 	Closed(id SurfaceID)
+	// PopupDone reports that the compositor dismissed a popup created with
+	// [Conn.NewPopup]: an outside click, a denied grab, or a gone parent. Call
+	// [Surface.Close] on it (and on its own child popups first).
+	PopupDone(id SurfaceID)
 	// FeedbackDone reports that a complete linux-dmabuf feedback round was
 	// applied; [Surface.Feedback] holds the new main device and formats. It
 	// is sent again whenever the compositor changes its preference.
@@ -87,6 +91,7 @@ func (NopHandler) Configure(SurfaceID, int32, int32) {}
 func (NopHandler) Scale(SurfaceID, float64)          {}
 func (NopHandler) Frame(SurfaceID)                   {}
 func (NopHandler) Closed(SurfaceID)                  {}
+func (NopHandler) PopupDone(SurfaceID)               {}
 func (NopHandler) FeedbackDone(SurfaceID)            {}
 func (NopHandler) Locked()                           {}
 func (NopHandler) LockFinished()                     {}

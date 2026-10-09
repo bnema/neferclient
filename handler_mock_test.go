@@ -568,6 +568,46 @@ func (_c *MockHandler_Pointer_Call) RunAndReturn(run func(ev *PointerEvent)) *Mo
 	return _c
 }
 
+// PopupDone provides a mock function for the type MockHandler
+func (_mock *MockHandler) PopupDone(id SurfaceID) {
+	_mock.Called(id)
+	return
+}
+
+// MockHandler_PopupDone_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PopupDone'
+type MockHandler_PopupDone_Call struct {
+	*mock.Call
+}
+
+// PopupDone is a helper method to define mock.On call
+//   - id SurfaceID
+func (_e *MockHandler_Expecter) PopupDone(id any) *MockHandler_PopupDone_Call {
+	return &MockHandler_PopupDone_Call{Call: _e.mock.On("PopupDone", id)}
+}
+
+func (_c *MockHandler_PopupDone_Call) Run(run func(id SurfaceID)) *MockHandler_PopupDone_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 SurfaceID
+		if args[0] != nil {
+			arg0 = args[0].(SurfaceID)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockHandler_PopupDone_Call) Return() *MockHandler_PopupDone_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockHandler_PopupDone_Call) RunAndReturn(run func(id SurfaceID)) *MockHandler_PopupDone_Call {
+	_c.Run(run)
+	return _c
+}
+
 // Scale provides a mock function for the type MockHandler
 func (_mock *MockHandler) Scale(id SurfaceID, scale float64) {
 	_mock.Called(id, scale)

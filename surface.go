@@ -83,6 +83,7 @@ const (
 	roleToplevel surfaceRole = iota + 1
 	roleLayer
 	roleLock
+	rolePopup
 )
 
 // Surface is one wl_surface with its role and the DMA-BUF presentation
@@ -99,9 +100,14 @@ type Surface struct {
 	feedback *linuxdmabuf.LinuxDmabufFeedback
 	xdg      *xdgshell.XdgSurface
 	toplevel *xdgshell.XdgToplevel
+	popup    *xdgshell.XdgPopup
 	layer    *wlrlayershell.LayerSurface
 	lockSurf *extsessionlock.ExtSessionLockSurface
 	lock     *Lock
+
+	parent    *Surface // popups: the surface they were created on
+	children  int      // open popups whose parent this surface is
+	repoToken uint32   // popups: last xdg_popup.reposition token
 
 	width, height int32
 	scale         float64
@@ -564,8 +570,10 @@ func (c *Conn) applySurface(ev *event, h Handler) {
 		h.Error(errors.New(badEventErrors[ev.a]))
 	case evClosed:
 		h.Closed(id)
-	case evXdgToplevel:
+	case evXdgToplevel, evPopupConfigure:
 		s.pendW, s.pendH = ev.a, ev.b
+	case evPopupDone:
+		h.PopupDone(id)
 	case evXdgConfigure:
 		if s.pendW > 0 && s.pendH > 0 {
 			s.width, s.height = s.pendW, s.pendH
@@ -728,6 +736,10 @@ func (s *Surface) stageInputRects(rects []Rect) (bool, error) {
 // children before parents. It is safe to call more than once. The caller must
 // stop using buffers it imported first (the compositor keeps them until it
 // processes the destruction).
+//
+// xdg-shell requires the topmost popup to go first: Close fails, and destroys
+// nothing, while popups created on this surface are still open. Close them
+// first.
 func (s *Surface) Close() error {
 	if s == nil || s.closed {
 		return nil
@@ -736,6 +748,9 @@ func (s *Surface) Close() error {
 		s.closed = true
 		return nil
 	}
+	if s.children > 0 {
+		return fmt.Errorf("neferclient: surface %d still has %d open popup(s): close them first", s.id, s.children)
+	}
 	return s.destroy()
 }
 
@@ -743,6 +758,10 @@ func (s *Surface) destroy() error {
 	s.closed = true
 	delete(s.c.surfaces, s.id)
 	s.c.seatSurfaceGone(s)
+	if s.parent != nil {
+		s.parent.children--
+		s.parent = nil
+	}
 	var errs []error
 	add := func(err error) {
 		if err != nil {
@@ -771,6 +790,9 @@ func (s *Surface) destroy() error {
 	}
 	if s.toplevel != nil {
 		add(s.toplevel.Destroy())
+	}
+	if s.popup != nil {
+		add(s.popup.Destroy())
 	}
 	if s.xdg != nil {
 		add(s.xdg.Destroy())
