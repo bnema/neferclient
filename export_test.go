@@ -39,3 +39,6 @@ func (s *Surface) MarkPresented() { s.presented = true }
 
 // DropFrameCallback marks the pending frame callback as answered.
 func (s *Surface) PendingFrame() bool { return !s.frameReady }
+
+// SetSeatErr stands in for a failed wl_seat bind.
+func (c *Conn) SetSeatErr(err error) { c.seatErr = err }

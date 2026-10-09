@@ -33,8 +33,13 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           install -d -m 700 "$XDG_RUNTIME_DIR"
       - run: |
-          go install github.com/vektra/mockery/v3@v3.8.0
-          go install honnef.co/go/tools/cmd/staticcheck@latest
+          # Build the tools against the latest x/tools so they can read the
+          # export data of the Go release installed above.
+          cd "$(mktemp -d)"
+          go mod init tools
+          go get -tool github.com/vektra/mockery/v3@v3.8.0 honnef.co/go/tools/cmd/staticcheck@latest
+          go get golang.org/x/tools@latest
+          go install tool
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - run: make check
       - run: make race

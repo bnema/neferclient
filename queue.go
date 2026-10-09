@@ -38,6 +38,8 @@ const (
 	evFeedbackDone       // id
 	evLocked             // id = lock generation
 	evLockFinished       // id = lock generation
+	evPopupConfigure     // id, a = width, b = height (before the matching evXdgConfigure)
+	evPopupDone          // id
 	evBadEvent           // id, a = badEvent code: the reader met a malformed event
 
 	// Seat events (kind >= evSeatCaps). Pointer and keyboard events carry the

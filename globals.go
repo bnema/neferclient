@@ -38,6 +38,7 @@ type globals struct {
 	fscale     *fractionalscale.WpFractionalScaleManager
 
 	layerVersion  uint32
+	xdgVersion    uint32
 	triedViewport bool
 	triedFScale   bool
 }
@@ -101,7 +102,7 @@ func (c *Conn) ensureXdg() error {
 		return nil
 	}
 	q := c.q
-	x, _, err := c.require(xdgshell.XdgWmBaseInterface, 6, 1, func(ctx *wl.Context) *xdgshell.XdgWmBase {
+	x, v, err := c.require(xdgshell.XdgWmBaseInterface, 6, 1, func(ctx *wl.Context) *xdgshell.XdgWmBase {
 		x := xdgshell.NewXdgWmBase(ctx)
 		x.OnPing(func(serial uint32) {
 			e := event{kind: evPing, serial: serial}
@@ -109,7 +110,7 @@ func (c *Conn) ensureXdg() error {
 		})
 		return x
 	})
-	c.g.xdg = x
+	c.g.xdg, c.g.xdgVersion = x, v
 	return err
 }
 

@@ -270,3 +270,96 @@ func TestHeadlessReconfigureWhilePending(t *testing.T) {
 	require.NoError(t, c.Roundtrip())
 	require.NoError(t, c.Dispatch(hd))
 }
+
+// headlessLayer opens a layer surface, waits until it is configured and
+// presents one buffer: compositors only place popups of mapped parents.
+func headlessLayer(t *testing.T, c *neferclient.Conn, hd *neferclientmocks.MockHandler, configured map[neferclient.SurfaceID][2]int32, frames *int) *neferclient.Surface {
+	t.Helper()
+	s, err := c.NewLayerSurface(neferclient.LayerConfig{
+		Level: neferclient.LayerTop, Anchors: neferclient.AnchorTop | neferclient.AnchorLeft, Width: 200, Height: 50,
+	})
+	require.NoError(t, err)
+	var feedback bool
+	hd.EXPECT().FeedbackDone(mock.Anything).Run(func(id neferclient.SurfaceID) { feedback = feedback || id == s.ID() }).Return().Maybe()
+	dispatchUntil(t, c, hd, func() bool { _, ok := configured[s.ID()]; return ok && feedback })
+	pw, ph, err := s.PhysicalSize()
+	require.NoError(t, err)
+	dmabuf := newUdmabuf(t, int(pw), int(ph))
+	acquire, signal := newSyncobjFD(t)
+	release, _ := newSyncobjFD(t)
+	require.NoError(t, s.ImportBuffer(1, &neferclient.Buffer{Width: pw, Height: ph, FourCC: 0x34325258, PlaneCount: 1,
+		Planes: [4]neferclient.Plane{{FD: dmabuf, Stride: uint32(pw) * 4}}}))
+	require.NoError(t, s.ImportTimeline(1, acquire))
+	require.NoError(t, s.ImportTimeline(2, release))
+	signal(1)
+	require.NoError(t, s.Present(&neferclient.Present{Buffer: 1, AcquireTimeline: 1, ReleaseTimeline: 2,
+		AcquirePoint: 1, ReleasePoint: 1, Opaque: true}))
+	dispatchUntil(t, c, hd, func() bool { return *frames == 1 })
+	return s
+}
+
+// A popup on a layer surface is configured with the requested size, can be
+// repositioned and is closed before its parent.
+func TestHeadlessPopupConfigure(t *testing.T) {
+	c := connectHeadless(t)
+	configured := map[neferclient.SurfaceID][2]int32{}
+	var frames int
+	hd := neferclientmocks.NewMockHandler(t)
+	hd.EXPECT().Configure(mock.Anything, mock.Anything, mock.Anything).Run(func(id neferclient.SurfaceID, w, h int32) {
+		configured[id] = [2]int32{w, h}
+	}).Return().Maybe()
+	hd.EXPECT().Frame(mock.Anything).Run(func(neferclient.SurfaceID) { frames++ }).Return().Maybe()
+	hd.EXPECT().Scale(mock.Anything, mock.Anything).Return().Maybe()
+	parent := headlessLayer(t, c, hd, configured, &frames)
+
+	pl := neferclient.PopupPlacement{
+		Anchor: neferclient.Rect{X: 10, Y: 0, Width: 20, Height: 50},
+		Edge:   neferclient.EdgeBottom, Gravity: neferclient.EdgeBottomRight,
+		Adjust: neferclient.AdjustSlideX | neferclient.AdjustFlipY, Width: 120, Height: 80,
+	}
+	p, err := c.NewPopup(neferclient.PopupConfig{Parent: parent, Place: pl})
+	require.NoError(t, err)
+	dispatchUntil(t, c, hd, func() bool { _, ok := configured[p.ID()]; return ok })
+	require.Equal(t, [2]int32{120, 80}, configured[p.ID()])
+
+	pl.Width, pl.Height = 90, 60
+	delete(configured, p.ID())
+	require.NoError(t, p.Reposition(pl))
+	dispatchUntil(t, c, hd, func() bool { _, ok := configured[p.ID()]; return ok })
+	require.Equal(t, [2]int32{90, 60}, configured[p.ID()])
+
+	require.Error(t, parent.Close(), "parent with an open popup")
+	require.NoError(t, p.Close())
+	require.NoError(t, parent.Close())
+	require.NoError(t, c.Roundtrip())
+	require.NoError(t, c.Dispatch(hd))
+}
+
+// A grab with a serial that is not the latest button press is dismissed.
+func TestHeadlessPopupStaleGrabIsDismissed(t *testing.T) {
+	c := connectHeadless(t)
+	configured := map[neferclient.SurfaceID][2]int32{}
+	var frames int
+	var done []neferclient.SurfaceID
+	hd := neferclientmocks.NewMockHandler(t)
+	hd.EXPECT().Configure(mock.Anything, mock.Anything, mock.Anything).Run(func(id neferclient.SurfaceID, w, h int32) {
+		configured[id] = [2]int32{w, h}
+	}).Return().Maybe()
+	hd.EXPECT().Frame(mock.Anything).Run(func(neferclient.SurfaceID) { frames++ }).Return().Maybe()
+	hd.EXPECT().Scale(mock.Anything, mock.Anything).Return().Maybe()
+	hd.EXPECT().PopupDone(mock.Anything).Run(func(id neferclient.SurfaceID) { done = append(done, id) }).Return().Maybe()
+	hd.EXPECT().Pointer(mock.Anything).Return().Maybe()
+	hd.EXPECT().KeyboardFocus(mock.Anything, mock.Anything).Return().Maybe()
+	parent := headlessLayer(t, c, hd, configured, &frames)
+
+	p, err := c.NewPopup(neferclient.PopupConfig{Parent: parent, Grab: true, Serial: 1, Place: neferclient.PopupPlacement{
+		Anchor: neferclient.Rect{Width: 20, Height: 50}, Edge: neferclient.EdgeBottom, Gravity: neferclient.EdgeBottomRight,
+		Width: 100, Height: 40,
+	}})
+	require.NoError(t, err)
+	dispatchUntil(t, c, hd, func() bool { return len(done) > 0 })
+	require.Equal(t, []neferclient.SurfaceID{p.ID()}, done)
+	require.NoError(t, p.Close())
+	require.NoError(t, parent.Close())
+	require.NoError(t, c.Roundtrip())
+}

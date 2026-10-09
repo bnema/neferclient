@@ -18,12 +18,16 @@ type countingHandler struct {
 	neferclient.NopHandler
 	fdReady, errs, frames int
 	keys, pointers        int
+	configures, popupDone int
 	lastText              string // set only by the allocation-free comparison below
 }
 
 func (h *countingHandler) FDReady(uint64)              { h.fdReady++ }
 func (h *countingHandler) Error(error)                 { h.errs++ }
 func (h *countingHandler) Frame(neferclient.SurfaceID) { h.frames++ }
+
+func (h *countingHandler) Configure(neferclient.SurfaceID, int32, int32) { h.configures++ }
+func (h *countingHandler) PopupDone(neferclient.SurfaceID)               { h.popupDone++ }
 
 func (h *countingHandler) Pointer(*neferclient.PointerEvent) { h.pointers++ }
 
@@ -158,5 +162,51 @@ func TestAllocPresent(t *testing.T) {
 	t.Logf("allocs per Present+frame round trip: %v", full)
 	require.Zero(t, full)
 	require.Positive(t, h.frames)
+	require.Zero(t, h.errs)
+}
+
+// TestAllocPopupEvents measures the popup events in steady state: the
+// xdg_popup configure (with its xdg_surface configure and the ack request it
+// triggers) and popup_done.
+func TestAllocPopupEvents(t *testing.T) {
+	skipUnderRace(t)
+	e := newPopupEnv(t, popupGlobals)
+	p, err := e.c.NewPopup(neferclient.PopupConfig{Parent: e.layer, Place: place, Grab: true, Serial: 3})
+	require.NoError(t, err)
+	require.NoError(t, e.c.Roundtrip())
+	xdg := e.xdgSurfaceOf(t, p.SurfaceObjectID())
+	_, gp := e.getPopup(t, xdg)
+	popup := gp.u32(0)
+	e.srv.mu.Lock()
+	e.srv.hook = func(uint32, uint16, []byte) {} // parse and discard, as the real peer's requests would be
+	e.srv.mu.Unlock()
+
+	const rounds = 40
+	var batch []byte
+	for i := range rounds {
+		batch = append(batch, frame(popup, 0, appendU32(appendU32(appendU32(appendU32(nil, 0), 0), 60), 40))...)
+		batch = append(batch, frame(xdg, 0, appendU32(nil, uint32(i+1)))...)
+		batch = append(batch, frame(popup, 1, nil)...) // popup_done
+	}
+	h := &countingHandler{}
+	step := func() {
+		if _, err := e.srv.conn.Write(batch); err != nil {
+			t.Fatal(err)
+		}
+		for e.c.QueueLen() < 3*rounds {
+			runtime.Gosched()
+		}
+		if err := e.c.Dispatch(h); err != nil {
+			t.Fatal(err)
+		}
+	}
+	step()
+	step()
+	before := h.popupDone
+	allocs := testing.AllocsPerRun(20, step)
+	t.Logf("allocs per Dispatch of %d popup events: %v", 3*rounds, allocs)
+	require.Zero(t, allocs)
+	require.Greater(t, h.popupDone, before)
+	require.Positive(t, h.configures)
 	require.Zero(t, h.errs)
 }

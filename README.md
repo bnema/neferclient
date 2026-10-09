@@ -38,6 +38,42 @@ for {
 }
 ```
 
+### Popups
+
+`Conn.NewPopup` creates an `xdg_popup` on a layer surface, a toplevel or another popup: a menu or tooltip placed relative to an anchor rectangle of its parent. With `Grab` the popup takes the keyboard and the compositor dismisses it on a click outside; the grab needs the `PointerEvent.Serial` of the button press that opened it. The compositor can dismiss a popup at any time, so a handler must implement `PopupDone` (embedded `NopHandler` ignores it) and close the popup; close popups before their parent.
+
+```go
+func (h *handler) Pointer(ev *neferclient.PointerEvent) {
+	if ev.Kind != neferclient.PointerButton || !ev.Pressed {
+		return
+	}
+	popup, err := h.conn.NewPopup(neferclient.PopupConfig{
+		Parent: h.bar, // a layer surface
+		Place: neferclient.PopupPlacement{
+			Anchor: neferclient.Rect{X: 100, Y: 0, Width: 24, Height: 30}, // on the parent, logical px
+			Edge:   neferclient.EdgeBottom, Gravity: neferclient.EdgeBottomRight,
+			Adjust: neferclient.AdjustSlideX | neferclient.AdjustFlipY,
+			Width:  200, Height: 120,
+		},
+		Grab: true, Serial: ev.Serial,
+	})
+	if err != nil {
+		h.err = err
+		return
+	}
+	h.popup = popup // presentable after Configure, like any surface
+}
+
+func (h *handler) PopupDone(id neferclient.SurfaceID) {
+	if h.popup != nil && h.popup.ID() == id {
+		h.err = h.popup.Close()
+		h.popup = nil
+	}
+}
+```
+
+`Surface.Reposition` moves a mapped popup (`xdg_wm_base` version 3).
+
 - [`examples/layer`](examples/layer): a layer surface with a counter button.
 - [`examples/lock`](examples/lock): a session lock with a masked password field. It is a demo and authenticates nothing; read its header before running it.
 
