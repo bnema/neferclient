@@ -83,7 +83,8 @@ type Conn struct {
 	curLock  *Lock // the live session lock, if any
 	tableBuf []byte
 	seat     *Seat
-	seatErr  error // a seat bind failure, reported by the next Dispatch
+	seatErr  error    // a seat bind failure, reported by the next Dispatch
+	grabTop  *Surface // the topmost popup of the open grab chain, nil without one
 
 	ready       bool // Connect finished; announcements go to the Handler
 	dispatching bool

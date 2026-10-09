@@ -108,6 +108,7 @@ type Surface struct {
 	parent    *Surface // popups: the surface they were created on
 	children  int      // open popups whose parent this surface is
 	repoToken uint32   // popups: last xdg_popup.reposition token
+	grabbed   bool     // popups: an explicit grab was taken and not dismissed yet
 
 	width, height int32
 	scale         float64
@@ -573,6 +574,7 @@ func (c *Conn) applySurface(ev *event, h Handler) {
 	case evXdgToplevel, evPopupConfigure:
 		s.pendW, s.pendH = ev.a, ev.b
 	case evPopupDone:
+		s.dropGrab() // the compositor ended the grab
 		h.PopupDone(id)
 	case evXdgConfigure:
 		if s.pendW > 0 && s.pendH > 0 {
@@ -758,6 +760,7 @@ func (s *Surface) destroy() error {
 	s.closed = true
 	delete(s.c.surfaces, s.id)
 	s.c.seatSurfaceGone(s)
+	s.dropGrab()
 	if s.parent != nil {
 		s.parent.children--
 		s.parent = nil

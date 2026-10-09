@@ -95,8 +95,7 @@ func (c *Conn) newPositioner(p *PopupPlacement) (*xdgshell.XdgPositioner, error)
 		pos.SetOffset(p.Offset[0], p.Offset[1]),
 	} {
 		if e != nil {
-			_ = pos.Destroy()
-			return nil, e
+			return nil, errors.Join(e, pos.Destroy())
 		}
 	}
 	return pos, nil
@@ -107,6 +106,16 @@ func (c *Conn) newPositioner(p *PopupPlacement) (*xdgshell.XdgPositioner, error)
 // reports the size the compositor gave it. Handle [Handler.PopupDone]: the
 // compositor dismisses the popup on an outside click or when the grab is
 // denied, and the popup must then be closed.
+//
+// The parent must be mapped: configured by the compositor and, for the
+// compositor to place the popup, presented at least once. NewPopup returns an
+// error for a parent that has not been configured yet; a compositor dismisses
+// (PopupDone) a popup whose parent shows nothing.
+//
+// A grab needs a seat and the serial of the user action. Its parent must be a
+// toplevel or layer surface, or the grabbing popup that is the topmost of the
+// connection's grab chain; only one chain exists at a time. Other grabs return
+// an error before any request is sent (xdg-shell would raise a protocol error).
 //
 // Close popups before their parent: Close of a surface with open child popups
 // fails.
@@ -122,6 +131,8 @@ func (c *Conn) NewPopup(cfg PopupConfig) (*Surface, error) {
 		return nil, fmt.Errorf("neferclient: popup parent: %w", ErrClosed)
 	case parent.role != roleLayer && parent.role != roleToplevel && parent.role != rolePopup:
 		return nil, errors.New("neferclient: popup parent must be a layer surface, a toplevel or a popup")
+	case !parent.configured:
+		return nil, errors.New("neferclient: popup parent is not configured yet: wait for its first Handler.Configure")
 	}
 	if err := validatePlacement(&cfg.Place); err != nil {
 		return nil, err
@@ -132,7 +143,17 @@ func (c *Conn) NewPopup(cfg PopupConfig) (*Surface, error) {
 		}
 		c.ensureSeat()
 		if c.seat == nil || c.seat.proxy == nil {
-			return nil, &CapabilityError{Name: "wl_seat", Cause: errors.New("popup grab needs a seat")}
+			cause := c.seatErr
+			if cause == nil {
+				cause = errors.New("popup grab needs a seat")
+			}
+			return nil, &CapabilityError{Name: "wl_seat", Cause: cause}
+		}
+		if parent.role == rolePopup && !parent.grabbed {
+			return nil, errors.New("neferclient: popup grab needs a grabbing parent popup")
+		}
+		if c.grabTop != nil && parent != c.grabTop {
+			return nil, errors.New("neferclient: popup grab needs the topmost grabbing popup as parent while a grab is open")
 		}
 	}
 	if err := c.ensureXdg(); err != nil {
@@ -162,8 +183,8 @@ func (c *Conn) NewPopup(cfg PopupConfig) (*Surface, error) {
 		parentXdg = parent.xdg
 	}
 	s.popup, err = s.xdg.GetPopup(parentXdg, pos)
-	_ = pos.Destroy() // the compositor copies the state at get_popup
-	if err != nil {
+	// The compositor copies the state at get_popup.
+	if err = errors.Join(err, pos.Destroy()); err != nil {
 		return nil, err
 	}
 	if parent.role == roleLayer {
@@ -191,6 +212,7 @@ func (c *Conn) NewPopup(cfg PopupConfig) (*Surface, error) {
 		if err = s.popup.Grab(c.seat.proxy, cfg.Serial); err != nil {
 			return nil, err
 		}
+		s.grabbed, c.grabTop = true, s
 	}
 	if err = s.finishSurface(); err != nil {
 		return nil, err
@@ -223,9 +245,20 @@ func (s *Surface) Reposition(p PopupPlacement) error {
 		return err
 	}
 	s.repoToken++
-	err = s.popup.Reposition(pos, s.repoToken)
-	if e := pos.Destroy(); err == nil {
-		err = e
+	return errors.Join(s.popup.Reposition(pos, s.repoToken), pos.Destroy())
+}
+
+// dropGrab ends the surface's grab: the topmost grabbing popup becomes its
+// parent, if that one still grabs.
+func (s *Surface) dropGrab() {
+	if !s.grabbed {
+		return
 	}
-	return err
+	s.grabbed = false
+	if c := s.c; c.grabTop == s {
+		c.grabTop = nil
+		if p := s.parent; p != nil && p.grabbed {
+			c.grabTop = p
+		}
+	}
 }
