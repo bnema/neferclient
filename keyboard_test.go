@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 
-	"github.com/bnema/purego-xkbcommon/raw"
+	"bnema.dev/purego-xkbcommon/raw"
 )
 
 // Evdev codes used below (US QWERTY positions).

@@ -29,8 +29,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bnema/neferclient"
-	"github.com/bnema/nefergui"
+	"bnema.dev/neferclient"
+	"bnema.dev/nefergui"
 )
 
 const keysymReturn, keysymKPEnter = 0xff0d, 0xff8d // xkb keysyms

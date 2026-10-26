@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/bnema/go-wayland-bindings/client/xdgshell"
+	"bnema.dev/go-wayland-bindings/client/xdgshell"
 )
 
 // PopupEdge names an edge or corner, used both as the anchor on the parent's

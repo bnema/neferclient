@@ -7,11 +7,11 @@ import (
 	"os"
 	"time"
 
-	xkb "github.com/bnema/purego-xkbcommon"
-	"github.com/bnema/purego-xkbcommon/raw"
+	xkb "bnema.dev/purego-xkbcommon"
+	"bnema.dev/purego-xkbcommon/raw"
 	"golang.org/x/sys/unix"
 
-	"github.com/bnema/neferclient/internal/secret"
+	"bnema.dev/neferclient/internal/secret"
 )
 
 // Modifiers is the set of active keyboard modifiers.

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/bnema/go-wayland-bindings/client/extsessionlock"
-	"github.com/bnema/wlturbo/wl"
+	"bnema.dev/go-wayland-bindings/client/extsessionlock"
+	"bnema.dev/wlturbo/wl"
 )
 
 // Lock is an ext-session-lock-v1 session lock. It reports [Handler.Locked]

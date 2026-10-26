@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/bnema/go-wayland-bindings/client/wayland"
-	"github.com/bnema/wlturbo"
-	"github.com/bnema/wlturbo/wl"
+	"bnema.dev/go-wayland-bindings/client/wayland"
+	"bnema.dev/wlturbo"
+	"bnema.dev/wlturbo/wl"
 	"golang.org/x/sys/unix"
 )
 

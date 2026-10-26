@@ -5,11 +5,11 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/bnema/go-wayland-bindings/client/wayland"
+	"bnema.dev/go-wayland-bindings/client/wayland"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 
-	"github.com/bnema/neferclient"
+	"bnema.dev/neferclient"
 )
 
 // countingHandler is the measured system's input, not a double of a port: it

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/bnema/go-wayland-bindings/client/wayland"
-	"github.com/bnema/wlturbo/wl"
+	"bnema.dev/go-wayland-bindings/client/wayland"
+	"bnema.dev/wlturbo/wl"
 	"golang.org/x/sys/unix"
 )
 

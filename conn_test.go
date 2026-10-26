@@ -5,14 +5,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bnema/go-wayland-bindings/client/wayland"
-	"github.com/bnema/neferclient"
+	"bnema.dev/go-wayland-bindings/client/wayland"
+	"bnema.dev/neferclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 
-	neferclientmocks "github.com/bnema/neferclient/mocks"
+	neferclientmocks "bnema.dev/neferclient/mocks"
 )
 
 // dispatchUntil dispatches whenever Wake fires until done reports true.

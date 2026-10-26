@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bnema/go-wayland-bindings/client/linuxdrmsyncobj"
-	"github.com/bnema/go-wayland-bindings/client/viewporter"
+	"bnema.dev/go-wayland-bindings/client/linuxdrmsyncobj"
+	"bnema.dev/go-wayland-bindings/client/viewporter"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"

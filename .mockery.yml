@@ -6,7 +6,7 @@ template: testify
 template-schema: '{{.Template}}.schema.json'
 require-template-schema-exists: true
 packages:
-  github.com/bnema/neferclient:
+  bnema.dev/neferclient:
     config:
       dir: mocks
       pkgname: neferclientmocks

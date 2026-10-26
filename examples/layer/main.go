@@ -26,8 +26,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bnema/neferclient"
-	"github.com/bnema/nefergui"
+	"bnema.dev/neferclient"
+	"bnema.dev/nefergui"
 )
 
 // Layout of the surface, in logical pixels: padding, a label row, a gap, then

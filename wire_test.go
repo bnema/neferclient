@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bnema/go-wayland-bindings/client/wayland"
-	"github.com/bnema/neferclient"
+	"bnema.dev/go-wayland-bindings/client/wayland"
+	"bnema.dev/neferclient"
 	"golang.org/x/sys/unix"
 )
 

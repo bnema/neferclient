@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 
-	"github.com/bnema/neferclient"
-	neferclientmocks "github.com/bnema/neferclient/mocks"
+	"bnema.dev/neferclient"
+	neferclientmocks "bnema.dev/neferclient/mocks"
 )
 
 const (

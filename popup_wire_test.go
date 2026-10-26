@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/bnema/neferclient"
-	neferclientmocks "github.com/bnema/neferclient/mocks"
+	"bnema.dev/neferclient"
+	neferclientmocks "bnema.dev/neferclient/mocks"
 )
 
 const (

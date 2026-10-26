@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 
-	"github.com/bnema/neferclient"
+	"bnema.dev/neferclient"
 )
 
 var surfaceGlobals = []wireGlobal{{1, "wl_compositor", 6}, {2, "zwp_linux_dmabuf_v1", 4},

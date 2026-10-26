@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bnema/go-wayland-bindings/client/wayland"
+	"bnema.dev/go-wayland-bindings/client/wayland"
 	"github.com/stretchr/testify/require"
 
-	"github.com/bnema/neferclient"
+	"bnema.dev/neferclient"
 )
 
 // headlessEnvDrop lists the environment prefixes the child compositor must not

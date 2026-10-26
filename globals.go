@@ -4,15 +4,15 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/bnema/go-wayland-bindings/client/extsessionlock"
-	"github.com/bnema/go-wayland-bindings/client/fractionalscale"
-	"github.com/bnema/go-wayland-bindings/client/linuxdmabuf"
-	"github.com/bnema/go-wayland-bindings/client/linuxdrmsyncobj"
-	"github.com/bnema/go-wayland-bindings/client/viewporter"
-	"github.com/bnema/go-wayland-bindings/client/wayland"
-	"github.com/bnema/go-wayland-bindings/client/wlrlayershell"
-	"github.com/bnema/go-wayland-bindings/client/xdgshell"
-	"github.com/bnema/wlturbo/wl"
+	"bnema.dev/go-wayland-bindings/client/extsessionlock"
+	"bnema.dev/go-wayland-bindings/client/fractionalscale"
+	"bnema.dev/go-wayland-bindings/client/linuxdmabuf"
+	"bnema.dev/go-wayland-bindings/client/linuxdrmsyncobj"
+	"bnema.dev/go-wayland-bindings/client/viewporter"
+	"bnema.dev/go-wayland-bindings/client/wayland"
+	"bnema.dev/go-wayland-bindings/client/wlrlayershell"
+	"bnema.dev/go-wayland-bindings/client/xdgshell"
+	"bnema.dev/wlturbo/wl"
 )
 
 // CapabilityError reports a missing or too old required protocol global.

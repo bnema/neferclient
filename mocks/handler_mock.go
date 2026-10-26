@@ -5,7 +5,7 @@
 package neferclientmocks
 
 import (
-	"github.com/bnema/neferclient"
+	"bnema.dev/neferclient"
 	mock "github.com/stretchr/testify/mock"
 )
 
