@@ -33,7 +33,7 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           install -d -m 700 "$XDG_RUNTIME_DIR"
       - run: |
-          go install github.com/vektra/mockery/v3@v3.8.1
+          go install github.com/vektra/mockery/v3@v3.9.0
           go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - run: make check
